@@ -144,7 +144,7 @@ export class RoomEngine implements WorldPort {
   }
   placeNpcOrder(npcId: EntityId, ticker: string, side: TradeSide, opts: EmitOpts): OrderResult {
     const npc = this.state.npcs[npcId];
-    if (!npc || !npc.walletId) {
+    if (!npc || !npc.walletId || npc.role !== "TRADER") {
       this.emit("TRADE_REJECTED", npcId, { commandId: this.nextId("ncmd"), walletId: null, actorId: npcId, actorKind: "NPC", ticker, side, qty: 1, reason: "ACTOR_NOT_ALLOWED" }, opts);
       return { ok: false, reason: "ACTOR_NOT_ALLOWED", message: "NPC has no wallet" };
     }
@@ -231,8 +231,10 @@ export class RoomEngine implements WorldPort {
     else this.emit("ROOM_RESET", "server", { seed: s.seed, previousRunId: previousRunId!, newRunId: s.runId, mode: s.mode }, { correlationId: corr });
     for (const npc of Object.values(s.npcs)) {
       if (!npc.walletId) continue;
-      this.deps.economy.openWallet(s, { id: npc.walletId, ownerId: npc.id, ownerKind: "NPC", ownerName: npc.name, balance: RULES.trade.startingWalletTrader });
-      this.emit("WALLET_OPENED", "server", { walletId: npc.walletId, ownerId: npc.id, ownerKind: "NPC", balance: RULES.trade.startingWalletTrader }, { correlationId: corr });
+      // Every agent has its own wallet: traders start with capital, everyone else earns from V$0.
+      const start = npc.role === "TRADER" ? RULES.trade.startingWalletTrader : 0;
+      this.deps.economy.openWallet(s, { id: npc.walletId, ownerId: npc.id, ownerKind: "NPC", ownerName: npc.name, balance: start });
+      this.emit("WALLET_OPENED", "server", { walletId: npc.walletId, ownerId: npc.id, ownerKind: "NPC", balance: start }, { correlationId: corr });
     }
     this.spawnMission(corr);
     this.announcePolicy();
@@ -497,7 +499,10 @@ export class RoomEngine implements WorldPort {
     this.dirty.characters.add(c.id);
     if (c.status === "ACTIVE" && c.heat >= RULES.heat.wantedThreshold) {
       c.status = "WANTED";
-      this.wantedEventOf.set(c.id, this.emit("WANTED_STATUS_CHANGED", c.id, { characterId: c.id, ticker: c.ticker, wanted: true, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), reason }, opts).eventId);
+      const wantedEv = this.emit("WANTED_STATUS_CHANGED", c.id, { characterId: c.id, ticker: c.ticker, wanted: true, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), reason }, opts);
+      this.wantedEventOf.set(c.id, wantedEv.eventId);
+      // A crew that already exists when an outlaw becomes wanted is market news too, not only a crew that forms afterwards.
+      if (c.role === "OUTLAW") for (const crew of this.crews.values()) if (crew.memberPlayerIds.length) this.crewMarketNote(crew, wantedEv, c.id);
     }
     this.reprice(c, "HEAT", opts);
   }
@@ -579,6 +584,8 @@ export class RoomEngine implements WorldPort {
 
     const eco = this.deps.economy;
     const bounty = a.captorKind === "HUMAN" && a.walletId ? eco.bountyFor(s, t.id, now) : 0;
+    // An officer who makes the capture earns the same bounty a human hunter would (paid after the capture event).
+    const npcBounty = a.captorKind === "NPC" ? eco.bountyFor(s, t.id, now) : 0;
     const q = t.ticker ? eco.quote(s, t.ticker, now) : null;
     t.status = "CAPTURED"; t.captureTimeMs = now; t.capturedBy = a.captorId;
     const halt = t.ticker ? eco.haltListing(s, t.ticker, now) : null;
@@ -618,6 +625,15 @@ export class RoomEngine implements WorldPort {
       ...(crew ? { shares, crewId: crew.id, crewName: crew.name, doubleCross: betrayed.length > 0 } : {}),
     }, { correlationId, causationId: cause });
     if (crew && betrayed.length) this.doubleCross(crew, a.captorId, betrayed, bounty, t, { correlationId, causationId: cap.eventId });
+    // Every agent is out for itself: the capturing officer earns the bounty, and the witness whose report put the
+    // target on the wanted list earns a tip.
+    const payOpts = { correlationId, causationId: cap.eventId };
+    if (npcBounty > 0) this.creditNpc(a.captorId, npcBounty, `bounty for ${t.ticker ?? t.nickname}`, payOpts);
+    const totalBounty = bounty + npcBounty;
+    if (totalBounty > 0) {
+      const report = [...s.messages].reverse().find((m) => m.kind === "REPORT" && m.subjectCharacterId === t.id && s.npcs[m.senderId]?.role === "WITNESS");
+      if (report) this.creditNpc(report.senderId, Math.max(RULES.profit.witnessTipMin, Math.round(totalBounty * RULES.profit.witnessTipShare)), `tip: report led to the capture of ${t.ticker ?? t.nickname}`, payOpts);
+    }
     if (t.ticker && halt) {
       const o = { causationId: cap.eventId, correlationId };
       this.emit("LISTING_HALTED", "exchange", { ticker: t.ticker, characterId: t.id, status: "HALTED_CAPTURED", finalSpotBeforeHalt: halt.finalSpotBeforeHalt }, o);
@@ -630,10 +646,11 @@ export class RoomEngine implements WorldPort {
   // ---------- hunter crews ----------
   hunterCrews(): Array<{ id: string; name: string; memberPlayerIds: EntityId[] }> { return [...this.crews.values()].map((k) => ({ id: k.id, name: k.name, memberPlayerIds: [...k.memberPlayerIds] })); }
   /** A crew forming or growing while an outlaw is wanted is public market news: each trader hears it and decides for itself. */
-  private crewMarketNote(crew: CrewView, cause: GameEvent): void {
+  private crewMarketNote(crew: CrewView, cause: GameEvent, onlyCharacterId?: EntityId): void {
     const s = this.state; const now = this.now();
     for (const c of Object.values(s.characters)) {
       if (c.role !== "OUTLAW" || c.status !== "WANTED" || !c.ticker) continue;
+      if (onlyCharacterId && c.id !== onlyCharacterId) continue;
       const n = crew.memberPlayerIds.length;
       const summary = `Hunter crew ${crew.name} (${n} hunter${n === 1 ? "" : "s"}) is now after ${c.ticker}: a capture would send it to zero.`;
       const o = { causationId: cause.eventId, correlationId: this.storyOf.get(c.id) ?? cause.correlationId };
@@ -970,7 +987,7 @@ export class RoomEngine implements WorldPort {
   }
   private markDirty(e: GameEvent): void {
     const p = e.payload as Record<string, unknown>; const s = this.state; const d = this.dirty;
-    for (const k of ["npcId", "agentId", "senderId", "recipientId", "issuedBy", "captorId"]) { const v = p[k]; if (typeof v === "string" && s.npcs[v]) d.agents.add(v); }
+    for (const k of ["npcId", "agentId", "senderId", "recipientId", "issuedBy", "captorId", "ownerId"]) { const v = p[k]; if (typeof v === "string" && s.npcs[v]) d.agents.add(v); }
     if (s.npcs[e.actorId]) d.agents.add(e.actorId);
     if (Array.isArray(p.recipientIds)) for (const v of p.recipientIds) if (typeof v === "string" && s.npcs[v]) d.agents.add(v);
     for (const k of ["characterId", "previousCharacterId", "targetCharacterId"]) { const v = p[k]; if (typeof v === "string") d.characters.add(v); }
@@ -1007,6 +1024,18 @@ export class RoomEngine implements WorldPort {
     return { id: n.id, name: n.name, role: n.role, goal: n.goal, persona: n.persona, x: n.x, z: n.z, activity: n.activity, targetCharacterId: n.targetCharacterId, walletCredits: w ? w.balanceCredits : null, holdings, contacts: n.contacts, ...this.brains.view(id) };
   }
   playerView(p: PlayerState): PlayerView { return { id: p.id, nickname: p.nickname, role: p.role, connected: p.connected, characterId: p.characterId, isBot: p.isBot }; }
+  private earned = new Map<string, { amount: number; reason: string }>();
+  /** Credits an NPC agent's own wallet and records it as an event (replayable). */
+  creditNpc(npcId: string, amount: number, reason: string, opts: EmitOpts): number | null {
+    const n = this.state.npcs[npcId];
+    const credit = Math.round(amount);
+    if (!n?.walletId || !this.state.wallets[n.walletId] || !(credit > 0)) return null;
+    const balanceAfter = this.deps.economy.credit(this.state, n.walletId, credit);
+    this.earned.set(npcId, { amount: credit, reason });
+    this.emit("WALLET_CREDITED", npcId, { walletId: n.walletId, ownerId: npcId, ownerName: n.name, amount: credit, reason, balanceAfter }, opts);
+    return balanceAfter;
+  }
+  lastEarning(npcId: string): { amount: number; reason: string } | null { return this.earned.get(npcId) ?? null; }
   walletView(walletId: string | null): WalletView | null { return walletId ? this.deps.economy.walletView(this.state, walletId) : null; }
   worldTick(): WorldTick {
     const s = this.state;

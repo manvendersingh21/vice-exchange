@@ -3,6 +3,7 @@ import type { AgentView, DecisionTrace, GameEvent, MemoryEntry } from "@vice/con
 import { nameOf, useGame, useSelectedAgent } from "../state/gameStore";
 import { ms, sourceLabel, traceHasProviderData, vd } from "../lib/format";
 import SwarmGraph from "./wow/SwarmGraph";
+import AgentPnl from "./wow/AgentPnl";
 
 const ROLE_ICON: Record<string, string> = { WITNESS: "👁", INFORMANT: "🗣", TRADER: "📈", POLICE: "🛡" };
 const PROV: Record<string, string> = { DIRECT: "saw it first-hand", MESSAGE: "was told", BULLETIN: "public bulletin", DOCUMENT: "policy document (NDI)" };
@@ -122,6 +123,7 @@ export function AgentInspector() {
           );
         })}
       </div>
+      {agent ? null : <AgentPnl />}
       {agent ? <AgentDetail a={agent} /> : <div className="swarm-idle"><SwarmGraph /></div>}
     </section>
   );

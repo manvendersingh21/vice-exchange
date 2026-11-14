@@ -55,6 +55,11 @@ export function buildPlan(world: WorldPort, npc: NpcState, memories: MemoryEntry
     my_memories: memories.slice(0, 8).map((m) => describeMemory(world, npc, m, nowMs)),
     my_contacts: npc.contacts.map((id) => actorLabel(world, id, npc.id)),
   };
+  // Every agent is out for its own gain: non-traders see their own earnings (traders see their wallet below).
+  if (wallet && npc.role !== "TRADER") {
+    const last = world.lastEarning?.(npc.id) ?? null;
+    base.my_money = `V$${wallet.balanceCredits} in my own wallet${last ? `; last earned V$${last.amount} (${last.reason})` : "; nothing earned yet"}`;
+  }
   const citations: Citation[] = [];
   const about = ticker ?? "the person involved";
 

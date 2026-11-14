@@ -36,6 +36,22 @@ describe("the swarm reacts to hunter crews", () => {
     }
   });
 
+  it("a crew that already exists when an outlaw becomes wanted is also market news for the traders", () => {
+    const { r, out, hun, settle, reqOf } = town();
+    expect(r.cmd(hun.id, { type: "crew.join", crewName: "WOLVES" }).ok).toBe(true);
+    settle();
+    expect(reqOf("npc_t1")).toBeUndefined(); // nobody is wanted yet: no crew note
+    const c = r.char(out.id);
+    (r.engine as unknown as { addHeat(c: unknown, n: number, why: string, o: object): void }).addHeat(c, 60, "test heat", {});
+    expect(c.status).toBe("WANTED");
+    for (const id of ["npc_t1", "npc_t2"]) {
+      const req = reqOf(id)!;
+      expect(req, `${id} should be deciding`).toBeTruthy();
+      expect(JSON.stringify(req.state)).toContain("Hunter crew WOLVES");
+      expect(JSON.stringify(req.state)).toContain(c.ticker!);
+    }
+  });
+
   it("crew forms -> trader decides -> the order goes through the normal settlement path", () => {
     const { r, out, hun, wanted } = town();
     wanted();

@@ -137,6 +137,7 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
         const from = led.lastSide;
         const switched = from !== null && from !== side;
         led.earnings += fee; led.lastSide = side; ledgers.set(npc.id, led);
+        world.creditNpc?.(npc.id, fee, side === "crew" ? "fee: sold a location to a hunter crew" : "fee: sold a warning to the outlaw", {});
         if (side === "crew") {
           const at = pos(m, target);
           // Sold to the largest crew (first formed on a tie).

@@ -152,6 +152,10 @@ export interface WorldPort {
   sendMessage(m: { senderId: EntityId; recipientId: EntityId; kind: MessageKind; sourceMemoryId: string | null; sourceEventId: string; subjectCharacterId: EntityId | null; summary: string; payload: Record<string, unknown> }, opts: EmitOpts): MessageRecord;
   /** Same validation and settlement path as a human order. Emits TRADE_EXECUTED / TRADE_REJECTED and price events. */
   placeNpcOrder(npcId: EntityId, ticker: string, side: TradeSide, opts: EmitOpts): OrderResult;
+  /** Credits an NPC's own wallet and emits WALLET_CREDITED (police bounty, informant fee, witness tip). */
+  creditNpc?(npcId: EntityId, amount: number, reason: string, opts: EmitOpts): number | null;
+  /** What this NPC last earned, if anything (its own knowledge). */
+  lastEarning?(npcId: EntityId): { amount: number; reason: string } | null;
   setNpcActivity(npcId: EntityId, activity: NpcActivity, target: { moveTarget?: Vec2 | null; targetCharacterId?: EntityId | null }): void;
   /** Police make a character wanted: raises heat, emits WANTED_STATUS_CHANGED + BULLETIN_PUBLISHED, writes WANTED_BULLETIN memories (sourceKind BULLETIN) to every NPC. No-op if a bulletin for that character is still fresh. */
   publishBulletin(policeNpcId: EntityId, characterId: EntityId, lastKnown: Vec2, opts: EmitOpts): void;

@@ -56,13 +56,16 @@ const FRAME = `scale=1760:990,pad=1920:1080:80:0:color=${BG}`;
 /** Renders one segment to mp4 of exactly `len` seconds; returns { file, len, map(wallMs) -> seconds into segment }. */
 function seg(s, i, prefix) {
   const out = `${WORK}/${prefix}-${String(i).padStart(2, "0")}-${s.id}.mp4`;
-  const cap = s.caption ? caption(s.caption, `${prefix}-cap-${i}`, s.tag, s.src) : null;
+  const cap = s.caption ? caption(s.caption, `${prefix}-cap-${i}`, s.tag, s.kind === "clip" ? "" : s.src) : null;
   const len = s.len;
   let speed = 1, t0 = 0;
   if (s.kind === "card") {
     ff(["-loop", "1", "-i", s.png, "-t", String(len), "-vf", "fps=25,scale=1920:1080", ...ENC, out]);
   } else if (s.kind === "still") {
     ff(["-loop", "1", "-i", s.png, "-loop", "1", "-i", cap, "-filter_complex", `[0:v]fps=25,${FRAME}[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+  } else if (s.kind === "clip" && !cap) {
+    speed = Math.max(1, (s.end - s.start) / len);
+    ff(["-ss", String(s.start), "-t", String(s.end - s.start), "-i", s.src, "-vf", `setpts=PTS/${speed.toFixed(4)},fps=25,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,tpad=stop_mode=clone:stop_duration=20`, "-t", String(len), ...ENC, out]);
   } else if (s.kind === "clip") {
     speed = Math.max(1, (s.end - s.start) / len);
     ff(["-ss", String(s.start), "-t", String(s.end - s.start), "-i", s.src, "-loop", "1", "-i", cap, "-filter_complex",
@@ -76,8 +79,9 @@ function seg(s, i, prefix) {
   } else {
     const l = listFile(D[`frames${s.cam}`], s.t0, s.t1, `${prefix}-${i}`);
     speed = Math.max(1, l.real / len); t0 = s.t0;
+    const fr = s.crop === "panels" ? `crop=836:620:764:40,scale=1335:990,pad=1920:1080:292:0:color=${BG}` : s.crop === "bottom" ? `crop=1600:480:0:420,scale=1920:576,pad=1920:1080:0:207:color=${BG}` : FRAME;
     ff(["-f", "concat", "-safe", "0", "-i", l.out, "-loop", "1", "-i", cap, "-filter_complex",
-      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=25,${FRAME},tpad=stop_mode=clone:stop_duration=20[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=25,${fr},tpad=stop_mode=clone:stop_duration=20[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
   }
   return { file: out, len, speed, map: (t) => (t0 && t >= s.t0 && t <= s.t1 ? (t - s.t0) / 1000 / speed : null) };
 }
@@ -93,7 +97,7 @@ function speak(text, out) {
   ff(["-i", raw, "-af", "loudnorm=I=-16:TP=-1.5:LRA=7,aresample=48000", "-ac", "2", out]);
 }
 function build(name, segsIn) {
-  const segs = segsIn.filter(Boolean);
+  let segs = segsIn.filter(Boolean);
   // Narration first: a segment is never shorter than its line.
   segs.forEach((s, i) => {
     if (!s.say) return;
@@ -102,6 +106,8 @@ function build(name, segsIn) {
     s.sayLen = dur(s.aiff);
     s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.8) * 10) / 10);
   });
+  // Stay at or under 3:08: drop the least important shots first.
+  for (const drop of ["replay", "memory", "ndi", "ota-carheli"]) { if (segs.reduce((a, s) => a + s.len, 0) <= 188) break; if (name === "vice-exchange-demo") { console.log("over length, dropping", drop); segs = segs.filter((s) => s.id !== drop); } }
   const done = segs.map((s, i) => seg(s, i, name));
   writeFileSync(`${WORK}/${name}-concat.txt`, done.map((d) => `file '${d.file}'`).join("\n") + "\n");
   const silent = `${WORK}/${name}-video.mp4`;
@@ -133,8 +139,14 @@ function build(name, segsIn) {
   return final;
 }
 
-const clips = readdirSync(`${REPO}/integrations/ota-bridge/frames`).filter((f) => f.endsWith(".mp4")).map((f) => `${REPO}/integrations/ota-bridge/frames/${f}`).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-const CLIP = clips[0], CLIPLEN = dur(CLIP);
+const FR = `${REPO}/integrations/ota-bridge/frames`;
+const clips = readdirSync(FR).filter((f) => f.endsWith(".mp4")).map((f) => `${FR}/${f}`).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+// The Open Theft Auto footage is the spine. demo/ota-shots.json (optional) names the clip and the in/out seconds of each shot.
+const SHOTS = existsSync(`${REPO}/demo/ota-shots.json`) ? JSON.parse(readFileSync(`${REPO}/demo/ota-shots.json`, "utf8")) : {};
+const CLIP = SHOTS.file ? path.resolve(REPO, SHOTS.file) : (clips.find((c) => /ota_hunt/.test(c)) ?? clips.find((c) => /full_chain/.test(c)) ?? clips[0]), CLIPLEN = dur(CLIP);
+const CLIP2 = clips.find((c) => /guns_cars_heli/.test(c)) ?? CLIP, CLIP2LEN = dur(CLIP2);
+const part = (name, a, b) => { const r = SHOTS.shots?.[name]; return r ? { src: CLIP, start: r[0], end: r[1] } : { src: CLIP, start: CLIPLEN * a, end: CLIPLEN * b }; };
+const carHeli = SHOTS.shots?.carheli ? { src: CLIP, start: SHOTS.shots.carheli[0], end: SHOTS.shots.carheli[1] } : (CLIP2 !== CLIP ? { src: CLIP2, start: 1, end: CLIP2LEN - 0.5 } : { src: CLIP, start: CLIPLEN * 0.82, end: CLIPLEN - 0.3 });
 const allDrex = Object.keys(M.proof?.metrics?.bySource ?? { x: 1 }).every((k) => k === "drex");
 const who = allDrex ? "Every card in this run is a real Drex call: options, probabilities, latency." : "Each card shows who decided, the options, probabilities and latency.";
 const cap = M.crash?.by?.[0];
@@ -156,64 +168,84 @@ const buildPng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6
 <div style="margin-top:34px;display:flex">${box("4 &middot; Drex answers", "A label with a probability for every option.", "#2ee6d6")}${arrow}${box("5 &middot; Server enforces", "Checks the label against the actions that are legal right now, then applies it.", "#b98cff")}${arrow}${box("6 &middot; Effect", "A message to another agent, a trade on the shared market, or a police move.", "#ffd166")}</div>
 <div style="margin-top:46px;font-size:34px;font-weight:700;text-align:center;color:#f2f4ff">Each effect is the trigger for the next agent: witness &#8594; police &#8594; public bulletin &#8594; traders &#8594; market &#8594; capture.</div>
 <div style="margin-top:22px;font-size:24px;text-align:center;color:#8f96bd">The model chooses. Code owns positions, wallets, prices and the capture rule.</div>`, "card-build");
-const rejected = (D.events ?? []).some((e) => e.type === "TRADE_REJECTED" && M.rejected && e.t >= M.rejected.t - 500);
-// Segments whose marks are missing from the take are skipped (returning null), so one command always produces a cut.
+const EV = D.events ?? [];
+const firstAfter = (type, t, pred = () => true) => EV.find((e) => e.type === type && e.t >= t && pred(e))?.t;
+const C0 = T("city");
+const tJob = C0 ? firstAfter("MISSION_COMPLETED", C0 - 60000, (e) => /^RYD/.test(e.p?.ticker ?? "")) ?? firstAfter("MISSION_COMPLETED", C0 - 60000) : null;
+const tWit = tJob ? firstAfter("DECISION_RESOLVED", tJob, (e) => e.p?.role === "WITNESS") : null;
+const tBul = tJob ? firstAfter("BULLETIN_PUBLISHED", tJob) : null;
+const tCapR = M.rydercap?.t ?? null;
+const inTake = (t) => t && C0 && t >= C0 && t <= (T("ryder1") ?? 0);
+// Real trader numbers, read from the snapshots saved during the take.
+const trA = M.city?.traders ?? [], trB = (M.proof ?? M.traders1 ?? M.ryder1)?.traders ?? [], trades = (M.proof ?? M.traders1 ?? M.ryder1)?.trades ?? [];
+const tr = (list, re) => list.find((x) => re.test(x.name));
+const shares = (x) => Object.values(x?.holdings ?? {}).reduce((a, b) => a + b, 0);
+const p1 = tr(trB, /Castellan/), p0 = tr(trA, /Castellan/), r1 = tr(trB, /Halvorsen/), r0 = tr(trA, /Halvorsen/);
+const nBuy = (re) => trades.filter((t) => re.test(t[0]) && t[1] === "BUY").length, nSell = (re) => trades.filter((t) => re.test(t[0]) && t[1] === "SELL").length;
+const say$ = (n) => `${n} credits`;
+const traderCap = p1 && r1 ? `Priya Castellan (momentum): ${nBuy(/Castellan/)} buys, ${nSell(/Castellan/)} sells, wallet V$${p1.credits}, ${shares(p1)} shares. Rook Halvorsen (risk-averse): ${nBuy(/Halvorsen/)} buys, ${nSell(/Halvorsen/)} sells, wallet V$${r1.credits}, ${shares(r1)} shares.` : "Two trader agents decide on the same ticker, each from its own memory and persona.";
+const traderSay = p1 && r1 ? `Traders in a simulated market, each deciding with Drex to grow its own money. Priya is a momentum trader: in this run she bought ${nBuy(/Castellan/)} ${nBuy(/Castellan/) === 1 ? "time" : "times"}${nSell(/Castellan/) ? ` and sold ${nSell(/Castellan/)}` : ""}, and her wallet stands at ${say$(p1.credits)}. Rook is risk averse: ${nBuy(/Halvorsen/) + nSell(/Halvorsen/) === 0 ? "he held every time and kept his" : `he made ${nBuy(/Halvorsen/) + nSell(/Halvorsen/)} trades and has`} ${say$(r1.credits)}.` : "Two trader agents decide on the same stock, each with its own persona.";
+const traderSay2 = p1 && r1 ? `Priya chases momentum. In this run she bought ${nBuy(/Castellan/)} ${nBuy(/Castellan/) === 1 ? "time" : "times"}${nSell(/Castellan/) ? ` and sold ${nSell(/Castellan/)}` : ""}, and has ${say$(p1.credits)} left${shares(p1) ? ` and ${shares(p1)} ${shares(p1) === 1 ? "share" : "shares"}` : ""}. Rook is risk averse. ${nBuy(/Halvorsen/) + nSell(/Halvorsen/) === 0 ? "He held every time and kept all" : `He made ${nBuy(/Halvorsen/) + nSell(/Halvorsen/)} trades and has`} ${say$(r1.credits)}.` : "Each trader has its own persona and its own wallet.";
+const gamePng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6d6;font-weight:800">THE GAME</div>
+<div style="margin-top:26px;font-size:64px;font-weight:900;color:#ff4fa3">Open Theft Auto, modified</div>
+<div style="margin-top:24px;font-size:38px;line-height:1.35;font-weight:500">An open-source 3D city (MIT license, Godot), rebuilt as a trading floor: every fugitive is a stock, and every agent in the city decides with Drex.</div>
+<div style="margin-top:26px;font-size:30px;line-height:1.35;color:#ffd166;font-weight:700">Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head.</div>
+<div style="margin-top:30px;display:flex;gap:26px">${box("The city", "Open Theft Auto's streets, cars and helicopter. Our server drives who is where and what they decide.", "#2ee6d6")}${box("The swarm", "Witnesses, informants, traders, police and a fugitive: nine agents, one Drex call per decision.", "#ff4fa3")}${box("The trading floor", "A browser terminal shows every decision, message, trade and price as it happens.", "#b98cff")}</div>`, "card-game");
+const hasRyder = !!M.city?.ryder;
 const main = [
-  { id: "title", kind: "card", len: 5, png: card(["Every outlaw is a stock. Every NPC decides for itself. Get caught and your ticker goes to V$0.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
-    say: "Vice Exchange. Every outlaw is a stock. Every character in the city decides for itself. The money is fictional game credits." },
+  { id: "hype", kind: "clip", ...part("flyover", 0, 0.12), len: 6, say: "Are you guys ready for G T A six? Say woo! Well, it's not out yet. So, inspired by open-world games like it, we built our own. Vice Exchange: a city where every agent is a trader." },
+  { id: "title", kind: "card", len: 3, png: card(["Open Theft Auto, rebuilt as a trading floor where every agent decides with Drex.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
+    say: "Built on Open Theft Auto, an open source city. All the money is fictional game credits." },
   { id: "track", kind: "card", len: 15, png: trackPng,
     say: "The track is Swarm Intelligence: multi-agent systems. Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, characters that think for themselves, or a team of agents dividing up a research task. This project is the first two at once." },
-  { id: "how-built", kind: "card", len: 16, png: buildPng,
-    say: "Here is one step of the swarm. A character sees something, or gets a message. The server makes one Drex call, built only from what that character knows. Drex answers with a choice and its probabilities. The server checks the choice is legal and applies it. That becomes a message, a trade, or a police move, and it triggers the next agent." },
-  has("city", "two") && { id: "city", cam: "C", t0: T("city"), t1: T("city") + 6800, len: 8, tag: "ONE PLAYER · A SWARM OF AGENTS", caption: "One player. A swarm of agents deciding against you: 2 witnesses, 2 informants, 2 traders, 2 police. Header badge: Drex.",
-    say: "One player against a swarm. Eight agents share this city: witnesses who can report you, informants who sell what they hear, traders who bet on you, and police who hunt you." },
-  has("two", "job") && { id: "two-players", kind: "duo", t0: T("two"), t1: T("job") - 900, len: 6, caption: "Two human players, one authoritative server: Outlaw (left) and Hunter (right), each with their own camera.",
-    say: "A second human joins as a hunter, after the bounty. The server owns every position and every price." },
-  has("job", "chain") && { id: "job", cam: "A", t0: T("job"), t1: T("chain"), len: 10, tag: allDrex ? "DREX DECIDES" : "NPC DECIDES", caption: "The outlaw does a job. A witness saw it: her decision card shows the options, probabilities and latency.", src: "decision cards: live values from this run",
-    say: "The outlaw does a job, and the price jumps. A witness saw it. Her decision card shows the options, the probabilities, and how long Drex took." },
-  has("chain", "inspect") && { id: "swarm-reacts", cam: "A", t0: T("chain"), t1: T("inspect"), len: 9, tag: "COORDINATE · COMPETE", caption: "Witness to police to public bulletin: WANTED, and the price falls. Each trader then decides on the same ticker from its own memory.",
-    say: "The agents coordinate. The witness reports, police put out a bulletin, and the price falls before anyone is caught. And they compete: each trader makes its own call on the same stock." },
-  has("inspect", "inspectend") && { id: "inspector", cam: "C", t0: T("inspect"), t1: T("inspectend"), len: 9, tag: "NDI", caption: "Agent Inspector on a police officer: private memory with provenance, the decision trace, and cited policy facts.", src: "policy: SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
-    say: "Click any agent to see what it knows and where each fact came from. Police decisions also cite a real San Francisco police order on foot pursuits, parsed with N D I." },
-  // PLACEHOLDER (shot at the end): the hunt with the stun weapon in the 3D city.
-  has("hunt0", "hunt1") && { id: "hunt", cam: M.hunt0.cam ?? "A", t0: T("hunt0"), t1: T("hunt1"), len: 20, tag: "PLAYERS HUNT · DREX DECIDES", caption: "Players hunt each other. Every NPC who sees it decides with Drex.", src: "decision cards: live values from this run",
-    say: M.hunt0.say ?? "Players hunt each other with a stun pulse. The outlaw's shot is seen, and every agent who saw it decides with Drex: report, pursue, or trade." },
-  // PLACEHOLDER (shot at the end): hunter crews that split a bounty or double-cross.
-  has("crew0", "crew1") && { id: "crews", cam: M.crew0.cam ?? "A", t0: T("crew0"), t1: T("crew1"), len: 12, tag: "NEGOTIATE", caption: M.crew0.caption ?? "Hunter crews: split the bounty, or double-cross.",
-    say: M.crew0.say ?? "Hunters can form a crew and split the bounty, or double-cross each other." },
-  has("pursuit", "crash") && { id: "pursuit", cam: "A", t0: Math.max(T("pursuit"), CAPT - 16000), t1: CAPT - 600, len: 6, caption: "Police set off after a dispatch delay and close in on foot (sped up).",
-    say: "Officers close in." },
-  has("crash") && { id: "capture", cam: "A", t0: CAPT - 600, t1: CAPT + 6400, len: 7, caption: cap ? `Captured by ${cap[0]}: the ticker goes to exactly V$0 and trading is halted.` : "Capture: the ticker goes to exactly V$0 and trading is halted.",
-    say: "Captured. The stock goes to exactly zero, and trading stops." },
-  has("rejected", "proof") && { id: "respawn", cam: "A", t0: T("rejected") - 300, t1: T("proof"), len: 7, caption: `${rejected ? "A buy on the halted ticker is rejected. " : ""}Respawn: a new character and a new ticker. The old one stays listed at V$0.`,
-    say: `${rejected ? "A buy on the halted stock is refused. " : ""}The player comes back as a new character with a new stock. The old one stays on the board at zero.` },
-  // PLACEHOLDER text may be replaced at the end (stolen car, helicopter) through M.world.say / M.world.caption.
-  { id: "world-3d", kind: "clip", src: CLIP, start: M.world?.start ?? 2, end: M.world?.end ?? CLIPLEN - 0.5, len: 18, caption: M.world?.caption ?? "The same server driving a 3D city client (Godot, on the MIT-licensed Open Theft Auto). Sped up.",
-    say: M.world?.say ?? "The same server also drives a full three D city. The same agents walk its streets, with their decisions over their heads." },
-  has("proof", "proofend") && { id: "experiment", cam: "A", t0: T("proof"), t1: T("proofend"), len: 15, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then: scripted vs Meta LLM vs Drex on one seed (sped up).", src: "numbers read from this recording's own run",
-    say: `${countsSay} Then one seeded scenario runs three ways: scripted rules, a Meta language model, and Drex, with measured latency.` },
-  has("verify") && { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 4, caption: `Server response: the event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
-    say: "And the whole run replays from its log, with no model calls." },
-  { id: "end", kind: "card", len: 4, png: card(["A swarm that decides. A market that reacts. Every decision on the record.", `Recorded from a real run · ${TESTS ? TESTS + " automated tests passing · " : ""}repo: vice-exchange`], "card-end"),
-    say: "Vice Exchange. A swarm that decides, with every decision on the record." },
+  { id: "game", kind: "card", len: 8, png: gamePng,
+    say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it." },
+  { id: "how-built", kind: "card", len: 14, png: buildPng,
+    say: "One step of the swarm. An agent sees something, or gets a message. The server makes one Drex call, built only from what that agent knows. Drex answers with a choice and its probabilities. The server checks it is legal and applies it. That triggers the next agent." },
+  { id: "ota-city", kind: "clip", ...part("flyover", 0, 0.14), len: 9, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and the fugitive Ryder, each deciding with Drex.",
+    say: "Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself." },
+  { id: "ota-job", kind: "clip", ...part("job", 0.14, 0.42), len: 9, tag: "COORDINATE", caption: "Ryder does a job. A witness sees it and reports. Police publish a bulletin: WANTED.",
+    say: "Ryder does a job. A witness sees it and reports. Police put out a bulletin, and he is wanted." },
+  inTake(tWit) && { id: "terminal-chain", cam: "C", crop: "panels", t0: Math.max(C0, tWit - 2500), t1: Math.min(T("ryder1"), (tBul ?? tWit) + 9000), len: 12, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
+    say: "The trading floor terminal shows every hop. Each card is one Drex decision, with the options, the probabilities and the latency. The graph shows who told whom." },
+  !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", crop: "panels", t0: C0, t1: T("ryder1"), len: 12, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
+    say: "The trading floor terminal shows every decision as it happens, with the options, the probabilities and the latency." },
+  has("insWitness", "insTrader1end") && { id: "memory", cam: "C", crop: "panels", t0: T("insWitness"), t1: T("insTrader1end"), len: 9, tag: "PRIVATE MEMORY", caption: "Each agent knows only what it saw or was told: source and hop count on every fact.",
+    say: "Each agent knows only what it saw, or what it was told. Every fact carries its source and how many hands it passed through." },
+  has("traders0", "traders1") && { id: "traders", cam: "C", crop: "panels", t0: T("traders0"), t1: T("traders1"), len: 8, tag: "TRADERS IN A SIMULATED MARKET", caption: "Traders in a simulated market, each deciding with Drex to grow its own V$: a new ticker lists and both trader agents decide.", src: "live values from this run",
+    say: "Traders in a simulated market, each deciding with Drex to grow its own money. A new stock lists, and both traders make their call." },
+  has("insTrader1", "insTrader2end") && { id: "traders-wallets", cam: "C", crop: "panels", t0: T("insTrader1"), t1: T("insTrader2end"), len: 8, tag: "OUT FOR PROFIT", caption: traderCap, src: "wallets and trades read from this run",
+    say: traderSay2 },
+  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.72), len: 12, tag: "COMPETE", caption: "A human hunter joins the chase inside Open Theft Auto and fires a stun pulse. Police and hunters race for the same capture.",
+    say: "Humans can join the hunt. A hunter chases him down and fires a stun pulse, racing the police for the same capture." },
+  { id: "ota-capture", kind: "clip", ...part("capture", 0.72, 0.84), len: 6, caption: "Captured: the ticker goes to exactly V$0 and trading is halted.",
+    say: "Captured. The stock goes to exactly zero." },
+  { id: "ota-carheli", kind: "clip", ...carHeli, len: 8, caption: "Still Open Theft Auto (MIT-licensed, open source): steal a car or take the helicopter.",
+    say: "And it is still Open Theft Auto. Steal a car, or take the helicopter." },
+  has("insPolice", "insPoliceend") && { id: "ndi", cam: "C", crop: "panels", t0: T("insPolice"), t1: T("insPoliceend"), len: 7, tag: "NDI", caption: "Police decisions cite facts from a real document.", src: "SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
+    say: "Police decisions cite a real San Francisco police order, parsed with N D I." },
+  has("proof", "proofend") && { id: "experiment", cam: "C", crop: "bottom", t0: T("proof") + 3000, t1: T("proofend"), len: 12, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then one seed, three ways: scripted, Meta LLM, Drex (sped up).", src: "numbers read from this recording's own run",
+    say: `${countsSay} Then the same seed runs three ways: scripted rules, a language model, and Drex, with measured latency.` },
+  has("verify") && { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 3, caption: `The event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
+    say: "And the log replays with zero model calls." },
+  { id: "end", kind: "card", len: 4, png: card(["Every agent is out for its own profit. They team up, and they turn on each other.", "The longer one survives, the more it is worth, and the bigger the bounty on its head.", `Recorded from real runs · ${TESTS ? TESTS + " automated tests passing · " : ""}built on Open Theft Auto (MIT)`], "card-end"),
+    say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. Vice Exchange." },
 ];
 const npcs = [
-  has("city") && { id: "eight-npcs", cam: "C", t0: T("city"), t1: T("city") + 6800, len: 9, caption: "One player against eight NPC agents: witnesses, informants, traders and police, each with private memory.",
-    say: "Eight agents share this city: witnesses, informants, traders and police. None of them can see what the others know." },
-  has("job", "inspect") && { id: "swarm-decides", cam: "A", t0: T("jobdone") - 1500, t1: T("inspect"), len: 15, caption: `After a job, several NPCs decide at once. ${who}`,
-    say: "When the outlaw does a job, only the agents who saw it react. The witness reports. A bulletin goes out. Then traders and officers each make their own call, shown live." },
-  has("hunt0", "hunt1") && { id: "hunt", cam: M.hunt0.cam ?? "A", t0: T("hunt0"), t1: T("hunt1"), len: 12, caption: "Players hunt each other. Every NPC who sees it decides with Drex.",
-    say: "Players hunt each other, and every agent who sees it decides what to do." },
-  has("pursuit", "crash") && { id: "officers-converge", cam: "A", t0: Math.max(T("pursuit"), CAPT - 14000), t1: CAPT + 6000, len: 9, caption: "Officers converge and make the capture: V$0.",
-    say: "Officers converge, and the stock goes to zero." },
-  { id: "swarm-3d", kind: "clip", src: CLIP, start: Math.min(12, CLIPLEN / 3), end: Math.min(36, CLIPLEN - 2), len: 11, caption: "The same swarm in the 3D city client: characters labelled by role, decisions above their heads (sped up).",
-    say: "The same swarm, inside the full three D city." },
+  { id: "ota-city", kind: "clip", ...part("flyover", 0, 0.14), len: 9, caption: "Nine agents in the modified Open Theft Auto city: witnesses, informants, traders, police and the fugitive Ryder.",
+    say: "Nine agents share this city: witnesses, informants, traders, police, and a fugitive. None of them can see what the others know." },
+  { id: "ota-job", kind: "clip", ...part("job", 0.14, 0.42), len: 10, caption: "Ryder does a job; only the agents who saw it react. Report, bulletin, WANTED.",
+    say: "When the fugitive does a job, only the agents who saw it react. A witness reports, and a bulletin goes out." },
+  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: T("ryder1"), len: 13, caption: `Several agents decide at once. ${who}`,
+    say: "Then traders and officers each make their own call, shown live with the options and probabilities." },
+  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.84), len: 11, caption: "Police and a human hunter converge; capture sends the ticker to V$0.",
+    say: "Police and a human hunter close in, and the stock goes to zero." },
 ];
 const which = process.env.ONLY;
-if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, "voice:", VOICE); }
+if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, gamePng, "voice:", VOICE); }
 else if (which === "voice") { const o = `${WORK}/voice-test.wav`; speak(main[1].say, o); console.log("voice:", VOICE, "test line", dur(o).toFixed(1), "s ->", o); }
 else {
   if (!which || which === "main") build("vice-exchange-demo", main);
   if (!which || which === "npcs") build("vice-exchange-npcs", npcs);
-  console.log("voice:", VOICE);
+  console.log("voice:", VOICE, "clip:", CLIP, "shots file:", Object.keys(SHOTS.shots ?? {}).join(",") || "none");
 }

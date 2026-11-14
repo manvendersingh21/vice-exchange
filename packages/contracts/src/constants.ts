@@ -48,6 +48,8 @@ export const RULES = {
   trade: { qtyPerOrder: 1, maxSharesPerTicker: 10, cooldownMs: 2000, startingWalletHuman: 2000, startingWalletTrader: 2000 },
   // "The later someone hunts you down, the more they get": bounty tracks reference value, which only grows with survival and notoriety.
   bounty: { fractionOfReference: 0.5, min: 50 },
+  // Every agent profits: the capturing officer earns the bounty; the witness whose report led to it earns a tip.
+  profit: { witnessTipShare: 0.1, witnessTipMin: 5 },
   // Stun pulse: no damage, nobody dies. A hit freezes a human character or a police NPC for stunMs.
   // An outlaw's shot adds heat and is an incident nearby NPCs can witness.
   // The hunted agent: an autonomous outlaw that decides with the room's decision engine. Humans join the hunt around it.

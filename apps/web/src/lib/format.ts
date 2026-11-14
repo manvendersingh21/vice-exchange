@@ -12,7 +12,7 @@ export const clock = (iso: string): string => { const d = new Date(iso); return 
 export type EventCategory = "world" | "agent" | "market" | "capture" | "system";
 export const CATEGORY: Record<EventType, EventCategory> = {
   ROOM_CREATED: "system", ROOM_RESET: "system", MODE_CHANGED: "system", PLAYER_JOINED: "system", PLAYER_LEFT: "system",
-  WALLET_OPENED: "system", CHARACTER_SPAWNED: "world", LISTING_OPENED: "market", MISSION_SPAWNED: "world",
+  WALLET_OPENED: "system", WALLET_CREDITED: "market", CHARACTER_SPAWNED: "world", LISTING_OPENED: "market", MISSION_SPAWNED: "world",
   MISSION_COMPLETED: "world", INCIDENT_OCCURRED: "world", NPC_OBSERVED: "agent", AGENT_MESSAGE_SENT: "agent",
   AGENT_MESSAGE_DELIVERED: "agent", BULLETIN_PUBLISHED: "agent", DECISION_REQUESTED: "agent", DECISION_RESOLVED: "agent",
   AGENT_ACTION_APPLIED: "agent", AGENT_ACTION_REJECTED: "agent", MARKET_PRICE_UPDATED: "market", TRADE_EXECUTED: "market",
@@ -49,6 +49,7 @@ export function describeEvent(e: GameEvent, s: GameState): string {
     case "PLAYER_JOINED": return `${p.nickname} ${p.reconnect ? "reconnected" : "joined"} as ${p.role}`;
     case "PLAYER_LEFT": return `${p.nickname} disconnected`;
     case "WALLET_OPENED": return `Wallet opened for ${n(p.ownerId)}: ${vd(p.balance)}`;
+    case "WALLET_CREDITED": return `${p.ownerName} earned ${vd(p.amount)}: ${p.reason} (wallet now ${vd(p.balanceAfter)})`;
     case "CHARACTER_SPAWNED": return `${p.nickname} spawned as ${p.role}${p.ticker ? ` · ticker ${p.ticker}` : ""}`;
     case "LISTING_OPENED": return `${p.ticker} listed at ${vd(p.spotPrice)}`;
     case "MISSION_SPAWNED": return `New job available: ${p.label}`;

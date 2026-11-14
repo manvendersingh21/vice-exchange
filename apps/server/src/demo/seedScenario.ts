@@ -26,7 +26,7 @@ export function seedNpcs(): Record<string, NpcState> {
       id: s.id, name: s.name, role: s.role, persona: s.persona, goal: s.goal,
       x: s.at.x, z: s.at.z, home: { ...s.at }, patrol: (s.patrol ?? []).map((p) => ({ ...p })), patrolIndex: s.patrol ? 1 : 0,
       activity: s.role === "POLICE" ? "PATROL" : "IDLE", moveTarget: null, targetCharacterId: null,
-      walletId: s.role === "TRADER" ? `wal_${s.id}` : null, contacts: [...s.contacts], cooldownUntilMs: 0, lastCaptureAttemptAtMs: 0,
+      walletId: `wal_${s.id}`, contacts: [...s.contacts], cooldownUntilMs: 0, lastCaptureAttemptAtMs: 0,
     };
   }
   return out;

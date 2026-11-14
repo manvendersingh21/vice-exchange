@@ -10,6 +10,8 @@ export interface EventPayloads {
   PLAYER_JOINED: { playerId: EntityId; nickname: string; role: HumanRole; reconnect: boolean };
   PLAYER_LEFT: { playerId: EntityId; nickname: string };
   WALLET_OPENED: { walletId: string; ownerId: EntityId; ownerKind: ActorKind; balance: number };
+  /** An agent earned fictional credits (police bounty, informant fee, witness tip). */
+  WALLET_CREDITED: { walletId: string; ownerId: EntityId; ownerName: string; amount: number; reason: string; balanceAfter: number };
   CHARACTER_SPAWNED: { characterId: EntityId; playerId: EntityId; nickname: string; role: CharacterRole; ticker: string | null; x: number; z: number; walletId: string };
   LISTING_OPENED: { ticker: string; characterId: EntityId; nickname: string; referenceValue: number; spotPrice: number };
   MISSION_SPAWNED: { missionId: string; x: number; z: number; label: string };
@@ -64,7 +66,7 @@ export interface EventPayloads {
 
 export type EventType = keyof EventPayloads;
 export const EVENT_TYPES = [
-  "ROOM_CREATED", "ROOM_RESET", "MODE_CHANGED", "PLAYER_JOINED", "PLAYER_LEFT", "WALLET_OPENED", "CHARACTER_SPAWNED",
+  "ROOM_CREATED", "ROOM_RESET", "MODE_CHANGED", "PLAYER_JOINED", "PLAYER_LEFT", "WALLET_OPENED", "WALLET_CREDITED", "CHARACTER_SPAWNED",
   "LISTING_OPENED", "MISSION_SPAWNED", "MISSION_COMPLETED", "INCIDENT_OCCURRED", "NPC_OBSERVED",
   "AGENT_MESSAGE_SENT", "AGENT_MESSAGE_DELIVERED", "BULLETIN_PUBLISHED", "DECISION_REQUESTED", "DECISION_RESOLVED",
   "AGENT_ACTION_APPLIED", "AGENT_ACTION_REJECTED", "MARKET_PRICE_UPDATED", "TRADE_EXECUTED", "TRADE_REJECTED",

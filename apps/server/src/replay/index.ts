@@ -42,6 +42,8 @@ export function projectEvents(events: readonly GameEvent[]): Projection {
       if (w) { w.balance = t.balanceAfter; if (t.sharesAfter > 0) w.holdings[t.ticker] = t.sharesAfter; else delete w.holdings[t.ticker]; }
       const l = p.listings[t.ticker]; if (l) l.trades++;
       p.trades++;
+    } else if (is(e, "WALLET_CREDITED")) {
+      const w = p.wallets[e.payload.walletId]; if (w) w.balance = e.payload.balanceAfter;
     } else if (is(e, "WANTED_STATUS_CHANGED")) {
       const c = p.characters[e.payload.characterId];
       if (c && (c.status === "ACTIVE" || c.status === "WANTED")) c.status = e.payload.wanted ? "WANTED" : "ACTIVE";
