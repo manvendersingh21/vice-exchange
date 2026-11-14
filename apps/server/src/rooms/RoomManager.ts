@@ -108,6 +108,11 @@ export class RoomManager {
       return { ok: true as const, id, room, playerId, result: this.result(room!, playerId) };
     };
 
+    // The default room has no creator: this machine's own browser directs it whenever no director is connected
+    // (never a LAN visitor, never a world-bridge client). Tying the slot to "no connected director" instead of
+    // "never handed out" means the presenter reopening a tab cannot leave the room without a director.
+    const directorPresent = humans.some((p) => p.connected && p.isDirector);
+    const localSlot = local && !socketId.startsWith("bridge:") && room.code === DEFAULT_ROOM_CODE && !directorPresent;
     if (cmd.type === "room.join") {
       const byToken = cmd.sessionToken ? humans.find((p) => p.sessionToken === cmd.sessionToken) : undefined;
       if (byToken) {
@@ -121,14 +126,15 @@ export class RoomManager {
       const graceOver = (p: PlayerState) => engine.now() - (p.disconnectedAtMs ?? 0) > RULES.reconnectGraceMs;
       const claim = humans.find((p) => !p.connected && p.role === cmd.role && p.nickname.toLowerCase() === name && (local || secret || graceOver(p)));
       if (claim) {
-        engine.reattach(claim.id, socketId, { sessionToken: randomBytes(24).toString("hex"), isDirector: secret });
+        // A nickname is not a credential: a reclaim directs only with the secret or as this machine's own browser.
+        engine.reattach(claim.id, socketId, { sessionToken: randomBytes(24).toString("hex"), isDirector: secret || localSlot });
         return done(claim.id);
       }
     }
     if (humans.filter((p) => p.connected).length >= RULES.maxPlayersPerRoom) return { ok: false, id, error: { code: "ROOM_FULL", message: "Room is full" } };
     // The creator directs their room. The boot-time default room has no creator, so the first browser on the server's own
     // machine directs it (never a LAN visitor, never a world-bridge client). The slot is not handed out again once taken.
-    const isDirector = creator || secret || (local && !room.hasDirector && room.code === DEFAULT_ROOM_CODE && !socketId.startsWith("bridge:"));
+    const isDirector = creator || secret || localSlot;
     if (isDirector) room.hasDirector = true;
     const p = engine.addPlayer({ nickname: this.uniqueNickname(cmd.nickname, humans), role: cmd.role, isDirector, sessionToken: randomBytes(24).toString("hex"), socketId });
     return done(p.id);

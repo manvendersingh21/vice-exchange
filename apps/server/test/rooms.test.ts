@@ -82,7 +82,9 @@ describe("coming back", () => {
     expect(back.characterId).toBe(a.characterId);
     expect(room.engine.state.characters[back.characterId!]!.ticker).toBe(ticker);
     expect(back.sessionToken).not.toBe(a.sessionToken);
-    expect(back.isDirector).toBe(false); // the original was director, but a nickname is not a credential
+    // A nickname is not a credential, but this machine's own browser directs the default room whenever no director
+    // is connected, so the presenter reopening a tab keeps the controls.
+    expect(back.isDirector).toBe(true);
     expect(Object.keys(room.engine.state.characters)).toHaveLength(1);
     expect(Object.keys(room.engine.state.listings)).toEqual([ticker]);
     // The old token is dead.
@@ -252,5 +254,36 @@ describe("audit: reclaim and secret handling", () => {
     const { join } = setup("abcdefghijkl");
     const r = join("Zed", "SPECTATOR", { directorSecret: "abcdefghijké", local: false });
     expect(r.isDirector).toBe(false);
+  });
+});
+
+describe("audit: the default room is never left without a director", () => {
+  it("a presenter who reopens a tab (no token) directs again; a second local browser does not take the slot while a director is connected", () => {
+    const { room, join } = setup();
+    const ace = join("Ace");
+    expect(ace.isDirector).toBe(true);
+    expect(join("Bo", "HUNTER").isDirector).toBe(false);
+    room.engine.disconnect(ace.playerId);
+    const back = join("Ace"); // fresh tab on this machine, no session token
+    expect(back.playerId).toBe(ace.playerId);
+    expect(back.isDirector).toBe(true);
+    expect(join("Cy", "SPECTATOR").isDirector).toBe(false);
+  });
+
+  it("when the director leaves for good, the next browser on this machine can direct; a LAN visitor never can without the secret", () => {
+    const { room, clock, join } = setup();
+    const ace = join("Ace");
+    room.engine.disconnect(ace.playerId);
+    expect(join("Lan", "SPECTATOR", { local: false }).isDirector).toBe(false);
+    expect(join("Dee", "SPECTATOR").isDirector).toBe(true);
+    // A LAN visitor who reclaims the old director's nickname after the grace window still does not direct.
+    const room2 = setup();
+    const a2 = room2.join("Ace");
+    room2.room.engine.disconnect(a2.playerId);
+    room2.clock.advance(RULES.reconnectGraceMs + 1000);
+    const taken = room2.join("Ace", "OUTLAW", { local: false });
+    expect(taken.playerId).toBe(a2.playerId);
+    expect(taken.isDirector).toBe(false);
+    void clock;
   });
 });
