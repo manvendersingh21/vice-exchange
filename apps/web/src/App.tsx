@@ -18,6 +18,40 @@ import { leaveRoom, newId, send, sendNoAck } from "./net/socketClient";
 import { vd } from "./lib/format";
 import { cameraRelative, cameraYaw } from "./scene/three/cameraYaw";
 
+/** Hunters can form or join a crew: crewmates near a capture split the bounty; a double-cross takes it all. */
+function CrewChip({ crewName }: { crewName: string | null }) {
+  const [name, setName] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const crew = useGame((s) => (crewName ? (s.crews ?? []).find((k) => k.name === crewName) ?? null : null));
+  const players = useGame((s) => s.players);
+  const join = async (n: string) => {
+    const ack = await send({ type: "crew.join", crewName: n, commandId: newId() });
+    setMsg(ack.ok ? null : ack.error?.message ?? "Could not join");
+  };
+  useEffect(() => {
+    const want = (new URLSearchParams(window.location.search).get("crew") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 12);
+    if (want.length >= 3 && !crewName) void join(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (crewName) {
+    const members = (crew?.memberPlayerIds ?? []).map((id) => players[id]?.nickname ?? id).join(", ");
+    return (
+      <span className="hud-chip" title="Crewmates within 25 m of a capture split the bounty equally. Stun a crewmate and capture within 12 s and you keep it all, and get thrown out.">
+        CREW {crewName}{members ? ` · ${members}` : ""}{" "}
+        <button className="crew-btn" onClick={() => void send({ type: "crew.leave", commandId: newId() })}>leave</button>
+      </span>
+    );
+  }
+  return (
+    <span className="hud-chip" title="Form or join a hunter crew (3 to 12 letters or digits). Crews share bounties.">
+      <input className="crew-input" value={name} maxLength={12} placeholder="crew name" onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9]/g, ""))}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && name.length >= 3) void join(name); }} onKeyUp={(e) => e.stopPropagation()} />
+      <button className="crew-btn" disabled={name.length < 3} onClick={() => void join(name)}>join crew</button>
+      {msg && <em> {msg}</em>}
+    </span>
+  );
+}
+
 function nearestMission(me: CharacterView, missions: MissionView[]): MissionView | null {
   const p = getPose(me.id) ?? me;
   let best: MissionView | null = null, bd = Infinity;
@@ -209,6 +243,7 @@ function Hud() {
       {me.role === "OUTLAW" && <span className="hud-chip">jobs {me.completedMissions} · notoriety {me.notorietyPoints} · escapes {me.successfulEscapes}</span>}
       {listing && live && <span className="hud-chip">bounty on you {vd(listing.currentBounty)}</span>}
       {live && <span className={`hud-chip ${(me.stunnedUntilMs ?? 0) > serverNow ? "bad" : ""}`} title="Stun pulse: no damage. A hit freezes a player or a police officer for 3 s.">{(me.stunnedUntilMs ?? 0) > serverNow ? "STUNNED" : `F pulse ${me.ammo ?? RULES.weapon.ammo}/${RULES.weapon.ammo}`}</span>}
+      {me.role === "HUNTER" && <CrewChip crewName={me.crewName ?? null} />}
       <span className="hud-chip dim">{live ? (me.role === "HUNTER" ? "WASD move · E capture a WANTED target within 2.5 m · F stun pulse" : "WASD move · E do the job at the marker · F stun pulse") : "CAPTURED — press R to respawn"}</span>
     </div>
   );

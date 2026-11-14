@@ -3,7 +3,7 @@
 // narration synthesised with macOS `say`, an ffmpeg-generated bed and effect cues, and muxes H.264 + AAC.
 // Usage: TAKE=<take dir> WORK=<work dir> node demo/assemble.mjs
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 const TAKE = process.env.TAKE, WORK = process.env.WORK, REPO = path.resolve(import.meta.dirname, "..");
@@ -14,9 +14,10 @@ const ff = (args) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error
 const dur = (f) => Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f]).toString().trim());
 const D = JSON.parse(readFileSync(`${TAKE}/marks.json`, "utf8"));
 const M = Object.fromEntries(D.marks.map((m) => [m.name, m]));
-const T = (n) => M[n].t;
+const T = (n) => M[n]?.t;
+const has = (...n) => n.every((k) => M[k]);
 const BG = "0x0a0a14";
-const CAPT = (D.events ?? []).find((e) => e.type === "CAPTURE_SUCCEEDED")?.t ?? M.crash.t;
+const CAPT = (D.events ?? []).find((e) => e.type === "CAPTURE_SUCCEEDED")?.t ?? M.crash?.t;
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
 function shot(html, out, w = 1920, h = 1080) {
@@ -81,14 +82,25 @@ function seg(s, i, prefix) {
   return { file: out, len, speed, map: (t) => (t0 && t >= s.t0 && t <= s.t1 ? (t - s.t0) / 1000 / speed : null) };
 }
 
-function build(name, segs, voice = "Samantha") {
+const PIPER = process.env.PIPER ?? "/tmp/vxtts/bin/piper", PIPER_MODEL = process.env.PIPER_MODEL ?? "/tmp/vxvoice/ryan.onnx";
+const HAVE_PIPER = existsSync(PIPER) && existsSync(PIPER_MODEL);
+export const VOICE = HAVE_PIPER ? "Piper neural voice en_US-ryan-high (rhasspy/piper-voices)" : "macOS say, voice Daniel (fallback)";
+/** One narration line -> loudness-normalised 48 kHz stereo WAV. Piper neural voice, or `say -v Daniel` if Piper is absent. */
+function speak(text, out) {
+  const raw = out.replace(/\.wav$/, "-raw.wav");
+  if (HAVE_PIPER) execFileSync(PIPER, ["-m", PIPER_MODEL, "-f", raw, "--length-scale", "0.97", "--sentence-silence", "0.28"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
+  else { const a = raw.replace(/\.wav$/, ".aiff"); execFileSync("say", ["-v", "Daniel", "-r", "165", "-o", a, text.replace(/\. /g, ". [[slnc 250]] ")]); ff(["-i", a, raw]); }
+  ff(["-i", raw, "-af", "loudnorm=I=-16:TP=-1.5:LRA=7,aresample=48000", "-ac", "2", out]);
+}
+function build(name, segsIn) {
+  const segs = segsIn.filter(Boolean);
   // Narration first: a segment is never shorter than its line.
   segs.forEach((s, i) => {
     if (!s.say) return;
-    s.aiff = `${WORK}/${name}-say-${i}.aiff`;
-    execFileSync("say", ["-v", voice, "-r", "178", "-o", s.aiff, s.say]);
+    s.aiff = `${WORK}/${name}-say-${i}.wav`;
+    speak(s.say, s.aiff);
     s.sayLen = dur(s.aiff);
-    s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.9) * 10) / 10);
+    s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.8) * 10) / 10);
   });
   const done = segs.map((s, i) => seg(s, i, name));
   writeFileSync(`${WORK}/${name}-concat.txt`, done.map((d) => `file '${d.file}'`).join("\n") + "\n");
@@ -106,9 +118,9 @@ function build(name, segs, voice = "Samantha") {
   ff(["-f", "lavfi", "-i", "sine=f=1320:d=0.07", "-af", "afade=t=out:st=0.01:d=0.06,volume=0.5", tick]);
   ff(["-f", "lavfi", "-i", "sine=f=52:d=1.6", "-f", "lavfi", "-i", "anoisesrc=d=1.6:c=brown:a=0.5", "-filter_complex", "[0:a][1:a]amix=inputs=2:normalize=0,lowpass=f=180,afade=t=out:st=0.05:d=1.5,volume=1.6", hit]);
   ff(["-f", "lavfi", "-i", `sine=f=55:d=${total}`, "-f", "lavfi", "-i", `sine=f=82.4:d=${total}`, "-f", "lavfi", "-i", `sine=f=164.8:d=${total}`, "-f", "lavfi", "-i", `anoisesrc=d=${total}:c=pink:a=0.08`,
-    "-filter_complex", `[0:a]volume=0.5[a];[1:a]volume=0.35,tremolo=f=0.15:d=0.6[b];[2:a]volume=0.12,tremolo=f=0.23:d=0.8[c];[3:a]lowpass=f=900[d];[a][b][c][d]amix=inputs=4:normalize=0,afade=t=in:d=2,afade=t=out:st=${(total - 3).toFixed(2)}:d=3,volume=0.12`, bed]);
+    "-filter_complex", `[0:a]volume=0.5[a];[1:a]volume=0.35,tremolo=f=0.15:d=0.6[b];[2:a]volume=0.12,tremolo=f=0.23:d=0.8[c];[3:a]lowpass=f=900[d];[a][b][c][d]amix=inputs=4:normalize=0,afade=t=in:d=2,afade=t=out:st=${(total - 3).toFixed(2)}:d=3,volume=0.045`, bed]);
   const ins = ["-i", bed]; const parts = ["[0:a]aformat=channel_layouts=stereo[x0]"]; let n = 1;
-  segs.forEach((s, i) => { if (!s.aiff) return; ins.push("-i", s.aiff); const ms = Math.round((offs[i] + 0.35) * 1000); parts.push(`[${n}:a]aformat=channel_layouts=stereo,volume=1.5,adelay=${ms}|${ms}[x${n}]`); n++; });
+  segs.forEach((s, i) => { if (!s.aiff) return; ins.push("-i", s.aiff); const ms = Math.round((offs[i] + 0.35) * 1000); parts.push(`[${n}:a]aformat=channel_layouts=stereo,volume=1.0,adelay=${ms}|${ms}[x${n}]`); n++; });
   for (const c of cues.slice(0, 40)) { ins.push("-i", c.kind === "hit" ? hit : tick); const ms = Math.round(c.at * 1000); parts.push(`[${n}:a]aformat=channel_layouts=stereo,adelay=${ms}|${ms}[x${n}]`); n++; }
   const mixIn = Array.from({ length: n }, (_, k) => `[x${k}]`).join("");
   const audio = `${WORK}/${name}-audio.m4a`;
@@ -123,15 +135,15 @@ function build(name, segs, voice = "Samantha") {
 
 const clips = readdirSync(`${REPO}/integrations/ota-bridge/frames`).filter((f) => f.endsWith(".mp4")).map((f) => `${REPO}/integrations/ota-bridge/frames/${f}`).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
 const CLIP = clips[0], CLIPLEN = dur(CLIP);
-const allDrex = Object.keys(M.proof.metrics.bySource).every((k) => k === "drex");
+const allDrex = Object.keys(M.proof?.metrics?.bySource ?? { x: 1 }).every((k) => k === "drex");
 const who = allDrex ? "Every card in this run is a real Drex call: options, probabilities, latency." : "Each card shows who decided, the options, probabilities and latency.";
-const cap = M.crash.by?.[0];
+const cap = M.crash?.by?.[0];
 
-const mt = M.proof.metrics, bs = mt.bySource;
+const mt = M.proof?.metrics ?? { total: 0, bySource: {} }, bs = mt.bySource;
 const nDrex = bs.drex ?? 0, nGuard = bs.drex_low_confidence_guardrail ?? 0, nFb = bs.fallback ?? 0, nOther = mt.total - nDrex - nGuard - nFb;
 const countsCap = `This run's metrics panel: ${mt.total} NPC decisions: ${nDrex} decided by Drex, ${nGuard} low-confidence guardrail, ${nFb} fallback${nOther ? `, ${nOther} other` : ""}.`;
 const countsSay = `In this run the metrics panel counts ${mt.total} decisions: ${nDrex} decided by Drex, ${nGuard} by the low confidence guardrail, and ${nFb} by fallback.`;
-const lat = M.proof.latency?.drex;
+const lat = M.proof?.latency?.drex;
 const box = (t, d, c) => `<div style="flex:1;border:2px solid ${c};border-radius:14px;padding:18px 20px;background:#12122299"><div style="font-size:27px;font-weight:800;color:${c}">${t}</div><div style="margin-top:8px;font-size:22px;color:#c9cfee;line-height:1.3">${d}</div></div>`;
 const arrow = `<div style="flex:none;font-size:44px;color:#ff4fa3;align-self:center;padding:0 10px">&#8594;</div>`;
 const trackPng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6d6;font-weight:800">NACE AI DREXATHON &middot; THE TRACK</div>
@@ -144,48 +156,64 @@ const buildPng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6
 <div style="margin-top:34px;display:flex">${box("4 &middot; Drex answers", "A label with a probability for every option.", "#2ee6d6")}${arrow}${box("5 &middot; Server enforces", "Checks the label against the actions that are legal right now, then applies it.", "#b98cff")}${arrow}${box("6 &middot; Effect", "A message to another agent, a trade on the shared market, or a police move.", "#ffd166")}</div>
 <div style="margin-top:46px;font-size:34px;font-weight:700;text-align:center;color:#f2f4ff">Each effect is the trigger for the next agent: witness &#8594; police &#8594; public bulletin &#8594; traders &#8594; market &#8594; capture.</div>
 <div style="margin-top:22px;font-size:24px;text-align:center;color:#8f96bd">The model chooses. Code owns positions, wallets, prices and the capture rule.</div>`, "card-build");
+const rejected = (D.events ?? []).some((e) => e.type === "TRADE_REJECTED" && M.rejected && e.t >= M.rejected.t - 500);
+// Segments whose marks are missing from the take are skipped (returning null), so one command always produces a cut.
 const main = [
   { id: "title", kind: "card", len: 5, png: card(["Every outlaw is a stock. Every NPC decides for itself. Get caught and your ticker goes to V$0.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
-    say: "Vice Exchange. Every outlaw is a stock, and every character decides for itself. V dollars are fictional game credits." },
-  { id: "track", kind: "card", len: 16, png: trackPng,
-    say: "The track is Swarm Intelligence: multi agent systems. Quote: Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, N P Cs that think for themselves, or a team of agents dividing up a research task. This project is the first two at once." },
-  { id: "how-built", kind: "card", len: 18, png: buildPng,
-    say: "How it is built. Each character has a role, a goal and a private memory. When it witnesses something or receives a message, the server makes one Drex call: a typed choice question built only from what that character knows. Drex returns a label with probabilities. The server checks it against the legal actions and applies it. The result is a message, a trade or a police move, which triggers the next agent." },
-  { id: "city", cam: "C", t0: T("city"), t1: T("two"), len: 9, tag: "THE SWARM", caption: "One live room: 8 NPCs (2 witnesses, 2 informants, 2 traders, 2 police), a shared market, header badge DREX: LIVE.",
-    say: "One live room, seen by a spectator. Eight characters: two witnesses, two informants, two traders and two police. The header badge reads Drex live." },
-  { id: "two-players", kind: "duo", t0: T("two"), t1: T("job"), len: 7, caption: "Two human players, one authoritative server: Outlaw (left) and Hunter (right).",
-    say: "Two human players share it: an outlaw and a hunter. The server owns every position and price." },
-  { id: "job", cam: "A", t0: T("job"), t1: T("chain"), len: 11, tag: allDrex ? "DREX DECIDES" : "NPC DECIDES", caption: "The outlaw does a job. A witness saw it: her decision card shows options, probabilities, latency and request id.", src: "decision card: live values from this run",
-    say: "The outlaw does a job and the price jumps. A witness saw it first hand. Her decision card shows the options, the probabilities, the latency and the request i d." },
-  { id: "swarm-reacts", cam: "C", t0: T("jobdone"), t1: T("jobdone") + 11000, len: 13, tag: "COORDINATE · COMPETE", caption: "Witness to police to public bulletin: WANTED, price falls. Traders then decide on the same ticker, each from its own memory.",
-    say: "Agents coordinate: the witness reports, police issue a public bulletin, the character is wanted, and the price falls before any capture. And they compete: each trader decides on the same ticker from its own memory." },
-  { id: "inspector", cam: "A", t0: T("inspect"), t1: Math.min(T("inspect") + 9000, CAPT - 800), len: 9, tag: "NDI", caption: "Agent Inspector on a police officer: private memory with provenance, the decision trace, and cited policy facts.", src: "policy: SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
-    say: "Inspect an officer: its private memory, where each fact came from, and its decision trace. Police decisions carry facts that N D I parsed from a real San Francisco Police Department foot pursuit order." },
-  { id: "pursuit", cam: "C", t0: T("jobdone") + 11000, t1: CAPT - 500, len: 7, caption: "Police set off after a dispatch delay and close in on foot (sped up).",
-    say: "Officers close in. This part is sped up." },
-  { id: "capture", cam: "C", t0: CAPT - 1000, t1: CAPT + 8500, len: 8, caption: cap ? `Captured by ${cap[0]}: the ticker goes to exactly V$0 and trading is halted.` : "Capture: the ticker goes to exactly V$0 and trading is halted.",
-    say: "Captured. The ticker goes to exactly zero and trading is halted." },
-  { id: "respawn", cam: "A", t0: T("halted"), t1: T("proof"), len: 6, caption: "Respawn: a new character and a new ticker. The old one stays listed, halted at V$0.",
-    say: "The player respawns with a new ticker. The old one stays listed, halted." },
-  { id: "world-3d", kind: "clip", src: CLIP, start: 2, end: CLIPLEN - 0.5, len: 20, caption: "The same server driving a 3D city client (Godot, on the MIT-licensed Open Theft Auto). Sped up.",
-    say: "The same server also drives a three D city client, with several characters in view and their decisions above their heads." },
-  { id: "experiment", cam: "A", t0: T("proof"), t1: T("proofend"), len: 17, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then: scripted vs Meta LLM vs Drex on one seed (sped up).", src: "numbers read from this recording's own run",
-    say: `${countsSay} The demo director then runs one seeded scenario three ways: scripted, a Meta language model, and Drex, and reports measured latency.` },
-  { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 4, caption: `Server response: the event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
-    say: "The event log, replayed with no model calls, matches live state." },
-  { id: "end", kind: "card", len: 5, png: card(["A swarm that decides. A market that reacts. Every decision on the record.", `Recorded from a real run · ${TESTS ? TESTS + " automated tests passing · " : ""}repo: vice-exchange-claude`], "card-end"),
-    say: "Vice Exchange. A swarm that decides, and every decision on the record." },
+    say: "Vice Exchange. Every outlaw is a stock. Every character in the city decides for itself. The money is fictional game credits." },
+  { id: "track", kind: "card", len: 15, png: trackPng,
+    say: "The track is Swarm Intelligence: multi-agent systems. Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, characters that think for themselves, or a team of agents dividing up a research task. This project is the first two at once." },
+  { id: "how-built", kind: "card", len: 16, png: buildPng,
+    say: "Here is one step of the swarm. A character sees something, or gets a message. The server makes one Drex call, built only from what that character knows. Drex answers with a choice and its probabilities. The server checks the choice is legal and applies it. That becomes a message, a trade, or a police move, and it triggers the next agent." },
+  has("city", "two") && { id: "city", cam: "C", t0: T("city"), t1: T("city") + 6800, len: 8, tag: "ONE PLAYER · A SWARM OF AGENTS", caption: "One player. A swarm of agents deciding against you: 2 witnesses, 2 informants, 2 traders, 2 police. Header badge: Drex.",
+    say: "One player against a swarm. Eight agents share this city: witnesses who can report you, informants who sell what they hear, traders who bet on you, and police who hunt you." },
+  has("two", "job") && { id: "two-players", kind: "duo", t0: T("two"), t1: T("job") - 900, len: 6, caption: "Two human players, one authoritative server: Outlaw (left) and Hunter (right), each with their own camera.",
+    say: "A second human joins as a hunter, after the bounty. The server owns every position and every price." },
+  has("job", "chain") && { id: "job", cam: "A", t0: T("job"), t1: T("chain"), len: 10, tag: allDrex ? "DREX DECIDES" : "NPC DECIDES", caption: "The outlaw does a job. A witness saw it: her decision card shows the options, probabilities and latency.", src: "decision cards: live values from this run",
+    say: "The outlaw does a job, and the price jumps. A witness saw it. Her decision card shows the options, the probabilities, and how long Drex took." },
+  has("chain", "inspect") && { id: "swarm-reacts", cam: "A", t0: T("chain"), t1: T("inspect"), len: 9, tag: "COORDINATE · COMPETE", caption: "Witness to police to public bulletin: WANTED, and the price falls. Each trader then decides on the same ticker from its own memory.",
+    say: "The agents coordinate. The witness reports, police put out a bulletin, and the price falls before anyone is caught. And they compete: each trader makes its own call on the same stock." },
+  has("inspect", "inspectend") && { id: "inspector", cam: "C", t0: T("inspect"), t1: T("inspectend"), len: 9, tag: "NDI", caption: "Agent Inspector on a police officer: private memory with provenance, the decision trace, and cited policy facts.", src: "policy: SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
+    say: "Click any agent to see what it knows and where each fact came from. Police decisions also cite a real San Francisco police order on foot pursuits, parsed with N D I." },
+  // PLACEHOLDER (shot at the end): the hunt with the stun weapon in the 3D city.
+  has("hunt0", "hunt1") && { id: "hunt", cam: M.hunt0.cam ?? "A", t0: T("hunt0"), t1: T("hunt1"), len: 20, tag: "PLAYERS HUNT · DREX DECIDES", caption: "Players hunt each other. Every NPC who sees it decides with Drex.", src: "decision cards: live values from this run",
+    say: M.hunt0.say ?? "Players hunt each other with a stun pulse. The outlaw's shot is seen, and every agent who saw it decides with Drex: report, pursue, or trade." },
+  // PLACEHOLDER (shot at the end): hunter crews that split a bounty or double-cross.
+  has("crew0", "crew1") && { id: "crews", cam: M.crew0.cam ?? "A", t0: T("crew0"), t1: T("crew1"), len: 12, tag: "NEGOTIATE", caption: M.crew0.caption ?? "Hunter crews: split the bounty, or double-cross.",
+    say: M.crew0.say ?? "Hunters can form a crew and split the bounty, or double-cross each other." },
+  has("pursuit", "crash") && { id: "pursuit", cam: "A", t0: Math.max(T("pursuit"), CAPT - 16000), t1: CAPT - 600, len: 6, caption: "Police set off after a dispatch delay and close in on foot (sped up).",
+    say: "Officers close in." },
+  has("crash") && { id: "capture", cam: "A", t0: CAPT - 600, t1: CAPT + 6400, len: 7, caption: cap ? `Captured by ${cap[0]}: the ticker goes to exactly V$0 and trading is halted.` : "Capture: the ticker goes to exactly V$0 and trading is halted.",
+    say: "Captured. The stock goes to exactly zero, and trading stops." },
+  has("rejected", "proof") && { id: "respawn", cam: "A", t0: T("rejected") - 300, t1: T("proof"), len: 7, caption: `${rejected ? "A buy on the halted ticker is rejected. " : ""}Respawn: a new character and a new ticker. The old one stays listed at V$0.`,
+    say: `${rejected ? "A buy on the halted stock is refused. " : ""}The player comes back as a new character with a new stock. The old one stays on the board at zero.` },
+  // PLACEHOLDER text may be replaced at the end (stolen car, helicopter) through M.world.say / M.world.caption.
+  { id: "world-3d", kind: "clip", src: CLIP, start: M.world?.start ?? 2, end: M.world?.end ?? CLIPLEN - 0.5, len: 18, caption: M.world?.caption ?? "The same server driving a 3D city client (Godot, on the MIT-licensed Open Theft Auto). Sped up.",
+    say: M.world?.say ?? "The same server also drives a full three D city. The same agents walk its streets, with their decisions over their heads." },
+  has("proof", "proofend") && { id: "experiment", cam: "A", t0: T("proof"), t1: T("proofend"), len: 15, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then: scripted vs Meta LLM vs Drex on one seed (sped up).", src: "numbers read from this recording's own run",
+    say: `${countsSay} Then one seeded scenario runs three ways: scripted rules, a Meta language model, and Drex, with measured latency.` },
+  has("verify") && { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 4, caption: `Server response: the event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
+    say: "And the whole run replays from its log, with no model calls." },
+  { id: "end", kind: "card", len: 4, png: card(["A swarm that decides. A market that reacts. Every decision on the record.", `Recorded from a real run · ${TESTS ? TESTS + " automated tests passing · " : ""}repo: vice-exchange`], "card-end"),
+    say: "Vice Exchange. A swarm that decides, with every decision on the record." },
 ];
 const npcs = [
-  { id: "eight-npcs", cam: "C", t0: T("city"), t1: T("two"), len: 10, caption: "Eight NPCs in one city: witnesses, informants, traders and police, each with private memory.",
-    say: "Eight characters share this city: witnesses, informants, traders and police. None of them can see what the others know." },
-  { id: "swarm-decides", cam: "C", t0: T("jobdone"), t1: T("jobdone") + 13000, len: 18, caption: `After a job, several NPCs decide at once. ${who}`,
-    say: "When an outlaw does a job, only the characters who saw it react. The witness decides to report. Messages cross the swarm graph, a bulletin goes out, and traders and officers each make their own call, shown as live decision cards." },
-  { id: "officers-converge", cam: "C", t0: T("jobdone") + 11000, t1: CAPT + 8000, len: 11, caption: "Both officers converge on the last known location while the market reprices (sped up).",
-    say: "Both officers converge on the last known location, while the market reprices around them." },
-  { id: "swarm-3d", kind: "clip", src: CLIP, start: Math.min(12, CLIPLEN / 3), end: Math.min(36, CLIPLEN - 2), len: 14, caption: "The same swarm in the 3D city client: characters labelled by role, decisions above their heads (sped up).",
-    say: "And the same swarm inside the three D city, with each character's role and decision floating above its head." },
+  has("city") && { id: "eight-npcs", cam: "C", t0: T("city"), t1: T("city") + 6800, len: 9, caption: "One player against eight NPC agents: witnesses, informants, traders and police, each with private memory.",
+    say: "Eight agents share this city: witnesses, informants, traders and police. None of them can see what the others know." },
+  has("job", "inspect") && { id: "swarm-decides", cam: "A", t0: T("jobdone") - 1500, t1: T("inspect"), len: 15, caption: `After a job, several NPCs decide at once. ${who}`,
+    say: "When the outlaw does a job, only the agents who saw it react. The witness reports. A bulletin goes out. Then traders and officers each make their own call, shown live." },
+  has("hunt0", "hunt1") && { id: "hunt", cam: M.hunt0.cam ?? "A", t0: T("hunt0"), t1: T("hunt1"), len: 12, caption: "Players hunt each other. Every NPC who sees it decides with Drex.",
+    say: "Players hunt each other, and every agent who sees it decides what to do." },
+  has("pursuit", "crash") && { id: "officers-converge", cam: "A", t0: Math.max(T("pursuit"), CAPT - 14000), t1: CAPT + 6000, len: 9, caption: "Officers converge and make the capture: V$0.",
+    say: "Officers converge, and the stock goes to zero." },
+  { id: "swarm-3d", kind: "clip", src: CLIP, start: Math.min(12, CLIPLEN / 3), end: Math.min(36, CLIPLEN - 2), len: 11, caption: "The same swarm in the 3D city client: characters labelled by role, decisions above their heads (sped up).",
+    say: "The same swarm, inside the full three D city." },
 ];
 const which = process.env.ONLY;
-if (!which || which === "main") build("vice-exchange-demo", main);
-if (!which || which === "npcs") build("vice-exchange-npcs", npcs);
+if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, "voice:", VOICE); }
+else if (which === "voice") { const o = `${WORK}/voice-test.wav`; speak(main[1].say, o); console.log("voice:", VOICE, "test line", dur(o).toFixed(1), "s ->", o); }
+else {
+  if (!which || which === "main") build("vice-exchange-demo", main);
+  if (!which || which === "npcs") build("vice-exchange-npcs", npcs);
+  console.log("voice:", VOICE);
+}

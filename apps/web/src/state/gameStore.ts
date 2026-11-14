@@ -27,6 +27,7 @@ export interface GameState {
   metrics: MetricsView | null;
   experiments: ExperimentResult[];
   policy: PolicyKnowledgeView | null;
+  crews: import("@vice/contracts").CrewView[];
   providerStatus: ProviderStatus | null;
   wallet: WalletView | null;
   serverTimeMs: number;
@@ -79,7 +80,7 @@ export const useGame = create<GameState>((set, get) => ({
   conn: "idle", session: null,
   roomCode: "", runId: "", roomId: "", seed: 0, ruleVersion: "", mode: "drex", map: CITY_MAP,
   players: {}, characters: {}, npcs: {}, missions: {}, listings: {}, trades: [], events: [],
-  metrics: null, experiments: [], policy: null, providerStatus: null, wallet: null,
+  metrics: null, experiments: [], policy: null, crews: [], providerStatus: null, wallet: null,
   serverTimeMs: 0, tick: 0, lastTick: null, selectedAgentId: null, selectedEventId: null, selectedTicker: null,
   viewMode: "3d", toasts: [], crash: null,
 
@@ -107,7 +108,7 @@ export const useGame = create<GameState>((set, get) => ({
       roomCode: s.roomCode, runId: s.runId, roomId: s.roomId, seed: s.seed, ruleVersion: s.ruleVersion, mode: s.mode, map: s.map ?? CITY_MAP,
       players: byId(s.players), characters: byId(s.characters), npcs: byId(s.npcs), missions: byId(s.missions),
       listings: Object.fromEntries(s.listings.map((l) => [l.ticker, l])), trades: s.trades, events,
-      metrics: s.metrics, experiments: s.experiments ?? [], policy: s.policy, providerStatus: s.providerStatus,
+      metrics: s.metrics, experiments: s.experiments ?? [], policy: s.policy, crews: s.crews ?? [], providerStatus: s.providerStatus,
       serverTimeMs: s.serverTimeMs, tick: s.tick, lastTick: null,
     });
   },

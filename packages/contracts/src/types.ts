@@ -133,6 +133,8 @@ export interface CharacterView {
   spawnTimeMs: number; captureTimeMs: number | null; capturedBy: EntityId | null;
   /** Stun pulse state (optional so older clients ignore it). */
   stunnedUntilMs?: number | null; ammo?: number; weaponReadyAtMs?: number;
+  /** Hunter crew, if any. */
+  crewId?: string | null; crewName?: string | null;
 }
 
 export interface PricePoint { t: number; spot: number; reference: number }
@@ -202,6 +204,8 @@ export interface WorldTick {
   npcs: Array<{ id: EntityId; x: number; z: number; activity: NpcActivity; pending: boolean; stunned?: boolean }>;
 }
 
+export interface CrewView { id: string; name: string; memberPlayerIds: EntityId[]; formedAtMs: number }
+
 export interface RoomSnapshot {
   roomId: string; roomCode: string; runId: string; seed: number; ruleVersion: string;
   tick: number; serverTimeMs: number; lastEventSequence: number;
@@ -209,6 +213,7 @@ export interface RoomSnapshot {
   players: PlayerView[]; characters: CharacterView[]; npcs: AgentView[]; missions: MissionView[];
   listings: ListingView[]; trades: TradeView[]; recentEvents: import("./events").GameEvent[];
   metrics: MetricsView; experiments: ExperimentResult[]; policy: PolicyKnowledgeView | null;
+  crews?: CrewView[];
 }
 
 export interface JoinResult {

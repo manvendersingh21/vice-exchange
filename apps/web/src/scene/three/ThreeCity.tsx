@@ -379,7 +379,7 @@ export default function ThreeCity(props: CityViewProps) {
           const price = c.ticker ? priceByTicker.get(c.ticker) : undefined;
           return (
             <div key={c.id} ref={labelRef(c.id)} style={{ ...labelStyle, borderColor: captured ? "#777" : wanted ? "#ff3b3b" : color, opacity: captured ? 0.7 : 1 }}>
-              <div>{c.id === youCharacterId ? "YOU · " : ""}{c.nickname}{captured ? " · CAPTURED" : wanted ? " · WANTED" : ""}</div>
+              <div>{c.id === youCharacterId ? "YOU · " : ""}{c.nickname}{c.crewName ? ` [${c.crewName}]` : ""}{captured ? " · CAPTURED" : wanted ? " · WANTED" : ""}</div>
               {c.ticker && <div style={{ color: captured ? "#ff6b6b" : "#3dffc8", fontWeight: 800 }}>{c.ticker}{price === undefined ? "" : ` V$${captured ? 0 : price}`}</div>}
             </div>
           );

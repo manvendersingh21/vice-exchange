@@ -19,6 +19,7 @@ export const CATEGORY: Record<EventType, EventCategory> = {
   TRADE_REJECTED: "market", WANTED_STATUS_CHANGED: "capture", ESCAPE_SUCCEEDED: "capture", CAPTURE_SUCCEEDED: "capture",
   CAPTURE_REJECTED: "capture", LISTING_HALTED: "capture", CHARACTER_ARCHIVED: "capture", CHARACTER_RESPAWNED: "world",
   POLICY_INGESTED: "system", WEAPON_FIRED: "capture", STUNNED: "capture",
+  CREW_JOINED: "capture", CREW_LEFT: "capture", CREW_BETRAYED: "capture",
 };
 
 /** Honest source labels: only "drex" is ever shown as Drex. */
@@ -71,7 +72,10 @@ export function describeEvent(e: GameEvent, s: GameState): string {
     case "TRADE_REJECTED": return `${n(p.actorId)} ${String(p.side).toLowerCase()} ${p.ticker} rejected: ${String(p.reason).toLowerCase().replace(/_/g, " ")}`;
     case "WANTED_STATUS_CHANGED": return `${p.ticker ?? n(p.characterId)} is ${p.wanted ? "now WANTED" : "no longer wanted"} (heat ${Math.round(p.heat)}) — ${p.reason}`;
     case "ESCAPE_SUCCEEDED": return `${p.ticker ?? n(p.characterId)} shook the heat (escape #${p.successfulEscapes})`;
-    case "CAPTURE_SUCCEEDED": return `${p.captorName} CAPTURED ${p.ticker ?? n(p.characterId)} after ${Math.round(p.survivalSeconds)} s${p.bounty ? ` · bounty ${vd(p.bounty)}` : ""}`;
+    case "CAPTURE_SUCCEEDED": return `${p.captorName} CAPTURED ${p.ticker ?? n(p.characterId)} after ${Math.round(p.survivalSeconds)} s${p.bounty ? ` · bounty ${vd(p.bounty)}` : ""}${p.doubleCross ? ` · DOUBLE-CROSS: took it all from crew ${p.crewName}` : Array.isArray(p.shares) && p.shares.length > 1 ? ` · split ${p.shares.length} ways in crew ${p.crewName} (${p.shares.map((x: { amount: number }) => vd(x.amount)).join(" / ")})` : ""}`;
+    case "CREW_JOINED": return `${p.nickname} ${p.created ? "formed" : "joined"} hunter crew ${p.crewName} (${p.memberPlayerIds.length} of ${RULES.crew.maxMembers})`;
+    case "CREW_LEFT": return `${p.nickname} ${p.reason === "EJECTED" ? "was thrown out of" : "left"} crew ${p.crewName}`;
+    case "CREW_BETRAYED": return `DOUBLE-CROSS in crew ${p.crewName}: ${p.betrayerName} stunned ${p.victimNames.join(" and ")} and kept the whole ${vd(p.bounty)} bounty`;
     case "CAPTURE_REJECTED": return `Capture attempt by ${n(p.captorId)} rejected: ${String(p.reason).toLowerCase().replace(/_/g, " ")}`;
     case "LISTING_HALTED": return `${p.ticker} HALTED — ${vd(p.finalSpotBeforeHalt)} → V$0`;
     case "CHARACTER_ARCHIVED": return `${p.ticker ?? n(p.characterId)} archived (history kept)`;

@@ -49,7 +49,10 @@ export function projectEvents(events: readonly GameEvent[]): Projection {
       const cap = e.payload;
       const c = p.characters[cap.characterId];
       if (c) { c.status = "CAPTURED"; c.capturedBy = cap.captorId; c.bounty = cap.bounty; }
-      if (cap.captorWalletId && cap.captorBalanceAfter !== null) {
+      if (cap.shares?.length) {
+        // Crew capture: every credited wallet is listed with its balance after the credit.
+        for (const sh of cap.shares) { const w = p.wallets[sh.walletId]; if (w) w.balance = sh.balanceAfter; }
+      } else if (cap.captorWalletId && cap.captorBalanceAfter !== null) {
         const w = p.wallets[cap.captorWalletId]; if (w) w.balance = cap.captorBalanceAfter;
       }
       p.captures++;

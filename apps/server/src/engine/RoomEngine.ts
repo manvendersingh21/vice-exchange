@@ -2,7 +2,7 @@ import {
   CITY_MAP, MISSION_SPOTS, RULES, RULES_VERSION, SPAWN_POINTS, carRects, dist, hasLineOfSight, insideRect, wantedLevel,
 } from "@vice/contracts";
 import type {
-  AgentView, CaptureRejectReason, CharacterView, ClientCommand, CommandAck, CommandErrorCode, DecisionMode, DecisionTrace,
+  AgentView, CaptureRejectReason, CharacterView, ClientCommand, CommandAck, CrewView, CommandErrorCode, DecisionMode, DecisionTrace,
   EntityId, EventPayloads, EventType, ExperimentResult, GameEvent, HumanRole, ListingView, MessageKind, MissionView, NpcActivity,
   PlayerView, PriceReason, RoomSnapshot, TradeSide, Vec2, WalletView, WorldTick,
 } from "@vice/contracts";
@@ -66,6 +66,10 @@ export class RoomEngine implements WorldPort {
   private ammo = new Map<string, number>();
   private weaponReadyAt = new Map<string, number>();
   private stunnedUntil = new Map<string, number>();
+  /** Hunter crews. crewOf: playerId -> crewId. crewStunAt: `${shooterPlayerId}>${victimPlayerId}` -> time of the last stun of a crewmate. */
+  private crews = new Map<string, CrewView>();
+  private crewOf = new Map<string, string>();
+  private crewStunAt = new Map<string, number>();
   private poseBudget = new Map<string, { metres: number; at: number }>();
   /** Per-officer chase/search record. `departAtMs` is when an investigation actually sets off (dispatch delay); `pace` is its walking speed. */
   private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null; departAtMs: number; pace: number }>();
@@ -403,6 +407,15 @@ export class RoomEngine implements WorldPort {
         return r.ok ? ack(id, { bounty: r.bounty }) : fail(id, "CAPTURE_REJECTED", `Capture rejected: ${r.reason}`, r.reason);
       }
       case "weapon.fire": return this.fireWeapon(player, c, cmd, id);
+      case "crew.join": {
+        if (player.role !== "HUNTER" || !c) return fail(id, "NOT_ALLOWED_FOR_ROLE", "Only hunters can join a crew", "NOT_ALLOWED_FOR_ROLE");
+        const r = this.joinCrew(player, cmd.crewName);
+        return r.ok ? ack(id, { crewId: r.crew.id, crewName: r.crew.name, memberPlayerIds: [...r.crew.memberPlayerIds] }) : fail(id, "CREW_REJECTED", r.message, r.reason);
+      }
+      case "crew.leave": {
+        const left = this.leaveCrew(player.id, "LEFT");
+        return left ? ack(id, { crewId: left.id }) : fail(id, "CREW_REJECTED", "You are not in a crew", "NOT_IN_CREW");
+      }
       case "character.respawn": {
         if (!c || c.status !== "CAPTURED") return fail(id, "NOT_CAPTURED", "Character is not captured");
         const corr = this.nextId("story");
@@ -448,6 +461,7 @@ export class RoomEngine implements WorldPort {
     this.deps.scheduler.cancelAll();
     this.idem.clear(); this.playerRemap.clear();
     this.ammo.clear(); this.weaponReadyAt.clear(); this.stunnedUntil.clear();
+    this.crews.clear(); this.crewOf.clear(); this.crewStunAt.clear();
     this.brains.reset();
     this.deps.memory.clear();
     this.initState(seed ?? prev.seed, prev.mode, prev.lastEventSequence);
@@ -568,7 +582,25 @@ export class RoomEngine implements WorldPort {
     const q = t.ticker ? eco.quote(s, t.ticker, now) : null;
     t.status = "CAPTURED"; t.captureTimeMs = now; t.capturedBy = a.captorId;
     const halt = t.ticker ? eco.haltListing(s, t.ticker, now) : null;
-    const captorBalanceAfter = bounty > 0 && a.walletId ? eco.credit(s, a.walletId, bounty) : null;
+    // Crew split: crewmates who are live, not stunned and close to the target share the bounty equally (remainder to
+    // the captor). If the captor stunned a crewmate shortly before, it is a double-cross: the captor takes it all.
+    const crew = a.captorKind === "HUMAN" ? this.crews.get(this.crewOf.get(a.captorId) ?? "") : undefined;
+    const mates = crew ? crew.memberPlayerIds.filter((pid) => pid !== a.captorId) : [];
+    const betrayed = bounty > 0 ? mates.filter((pid) => now - (this.crewStunAt.get(`${a.captorId}>${pid}`) ?? -Infinity) <= RULES.crew.betrayalWindowMs) : [];
+    const assists = bounty > 0 && betrayed.length === 0 ? mates.filter((pid) => {
+      const p = s.players[pid]; const mc = p?.characterId ? s.characters[p.characterId] : undefined;
+      return !!p?.walletId && this.live(mc ?? null) && !this.isStunned(mc!.id, now) && dist(mc!, t) <= RULES.crew.assistRadiusM;
+    }) : [];
+    const each = Math.floor(bounty / (assists.length + 1));
+    const captorAmount = bounty - each * assists.length;
+    const captorBalanceAfter = bounty > 0 && a.walletId ? eco.credit(s, a.walletId, captorAmount) : null;
+    const shares = crew && bounty > 0 && a.walletId && captorBalanceAfter !== null ? [{ playerId: a.captorId, walletId: a.walletId, amount: captorAmount, balanceAfter: captorBalanceAfter }] : undefined;
+    if (shares) for (const pid of assists) {
+      const wid = s.players[pid]!.walletId!;
+      shares.push({ playerId: pid, walletId: wid, amount: each, balanceAfter: eco.credit(s, wid, each) });
+      this.dirty.wallets.add(wid);
+    }
+    if (a.walletId) this.dirty.wallets.add(a.walletId);
     const owner = s.players[t.playerId]; if (owner) owner.moveDir = { x: 0, z: 0 };
     for (const n of Object.values(s.npcs)) if (n.targetCharacterId === t.id) this.setNpcActivity(n.id, n.role === "POLICE" ? "PATROL" : "IDLE", {});
     const correlationId = this.storyOf.get(t.id) ?? this.nextId("story");
@@ -583,7 +615,9 @@ export class RoomEngine implements WorldPort {
       captureId: this.nextId("cap"), commandId: a.commandId, characterId: t.id, ticker: t.ticker, captorId: a.captorId, captorName: a.captorName, captorKind: a.captorKind,
       captorWalletId: bounty > 0 ? a.walletId : null, bounty, captorBalanceAfter, referenceAtCapture: halt?.referenceAtHalt ?? q?.referenceValue ?? 0,
       spotBeforeCapture: halt?.finalSpotBeforeHalt ?? q?.spotPrice ?? 0, survivalSeconds: Math.floor((now - t.spawnTimeMs) / 1000),
+      ...(crew ? { shares, crewId: crew.id, crewName: crew.name, doubleCross: betrayed.length > 0 } : {}),
     }, { correlationId, causationId: cause });
+    if (crew && betrayed.length) this.doubleCross(crew, a.captorId, betrayed, bounty, t, { correlationId, causationId: cap.eventId });
     if (t.ticker && halt) {
       const o = { causationId: cap.eventId, correlationId };
       this.emit("LISTING_HALTED", "exchange", { ticker: t.ticker, characterId: t.id, status: "HALTED_CAPTURED", finalSpotBeforeHalt: halt.finalSpotBeforeHalt }, o);
@@ -591,6 +625,61 @@ export class RoomEngine implements WorldPort {
       for (const w of Object.values(s.wallets)) if (w.holdings[t.ticker]?.shares) this.dirty.wallets.add(w.id);
     }
     return { ok: true, bounty };
+  }
+
+  // ---------- hunter crews ----------
+  private joinCrew(player: PlayerState, rawName: string): { ok: true; crew: CrewView } | { ok: false; reason: string; message: string } {
+    const name = rawName.trim().toUpperCase();
+    let crew = [...this.crews.values()].find((k) => k.name === name);
+    if (crew && crew.memberPlayerIds.includes(player.id)) return { ok: true, crew };
+    if (crew && crew.memberPlayerIds.length >= RULES.crew.maxMembers) return { ok: false, reason: "CREW_FULL", message: `Crew ${name} is full (${RULES.crew.maxMembers})` };
+    this.leaveCrew(player.id, "SWITCHED");
+    const created = !crew;
+    if (!crew) { crew = { id: this.nextId("crew"), name, memberPlayerIds: [], formedAtMs: this.now() }; this.crews.set(crew.id, crew); }
+    crew.memberPlayerIds.push(player.id);
+    this.crewOf.set(player.id, crew.id);
+    this.emit("CREW_JOINED", player.id, { crewId: crew.id, crewName: crew.name, playerId: player.id, nickname: player.nickname, created, memberPlayerIds: [...crew.memberPlayerIds] });
+    this.touchCrew(crew, player.id);
+    return { ok: true, crew };
+  }
+  private leaveCrew(playerId: string, reason: "LEFT" | "SWITCHED" | "EJECTED", opts: EmitOpts = {}): CrewView | null {
+    const crew = this.crews.get(this.crewOf.get(playerId) ?? "");
+    if (!crew) return null;
+    crew.memberPlayerIds = crew.memberPlayerIds.filter((pid) => pid !== playerId);
+    this.crewOf.delete(playerId);
+    if (crew.memberPlayerIds.length === 0) this.crews.delete(crew.id);
+    this.emit("CREW_LEFT", playerId, { crewId: crew.id, crewName: crew.name, playerId, nickname: this.state.players[playerId]?.nickname ?? playerId, reason, memberPlayerIds: [...crew.memberPlayerIds] }, opts);
+    this.touchCrew(crew, playerId);
+    return crew;
+  }
+  private touchCrew(crew: CrewView, alsoPlayerId: string): void {
+    for (const pid of [...crew.memberPlayerIds, alsoPlayerId]) { const cid = this.state.players[pid]?.characterId; if (cid) this.dirty.characters.add(cid); }
+    this.dirty.snapshot = true;
+  }
+  /** A hunter stunned a crewmate and then took the capture alone: public, witnessed, and remembered by the informants. */
+  private doubleCross(crew: CrewView, betrayerId: string, victimIds: string[], bounty: number, at: Vec2, opts: EmitOpts): void {
+    const s = this.state; const now = this.now();
+    const betrayer = s.players[betrayerId]; const name = betrayer?.nickname ?? betrayerId;
+    const victimNames = victimIds.map((pid) => s.players[pid]?.nickname ?? pid);
+    const ev = this.emit("CREW_BETRAYED", betrayerId, { crewId: crew.id, crewName: crew.name, betrayerPlayerId: betrayerId, betrayerName: name, victimPlayerIds: [...victimIds], victimNames, bounty }, opts);
+    const o = { causationId: ev.eventId, correlationId: opts.correlationId };
+    this.leaveCrew(betrayerId, "EJECTED", o);
+    const bc = betrayer?.characterId ? s.characters[betrayer.characterId] : undefined;
+    const summary = `Crew ${crew.name} turned on its own: hunter ${name} stunned ${victimNames.join(" and ")} and took the full bounty of V$${bounty}.`;
+    // Anyone in sight witnesses it through the normal perception path and decides for themselves.
+    if (bc) this.incident("SIGHTING", bc, summary, o, { x: at.x, z: at.z });
+    // Word reaches both informants as a public fact; whether they pass it on is their own decision.
+    for (const n of Object.values(s.npcs)) {
+      if (n.role !== "INFORMANT") continue;
+      const memId = this.nextId("mem");
+      this.emitWith("NPC_OBSERVED", n.id, { npcId: n.id, memoryId: memId, factType: "RUMOR", subjectCharacterId: bc?.id ?? null, distance: Math.round(dist(n, at)), incidentId: null, summary }, o, (e) => {
+        this.deps.memory.remember({
+          agentId: n.id, factType: "RUMOR", subjectCharacterId: bc?.id ?? null, subjectTicker: null, eventId: e.eventId, sourceActorId: "public", sourceKind: "BULLETIN", sourceMemoryId: null, hop: 1,
+          observedAtMs: now, expiresAtMs: now + RULES.memory.ttlMs.RUMOR, confidence: RULES.memory.confidence.BULLETIN, summary, payload: { x: at.x, z: at.z, crew: crew.name, bounty }, citation: null,
+        }, memId);
+      });
+      this.dirty.agents.add(n.id);
+    }
   }
 
   // ---------- stun pulse ----------
@@ -643,7 +732,9 @@ export class RoomEngine implements WorldPort {
     if (hit) {
       const untilMs = now + W.stunMs;
       this.stunnedUntil.set(hit.id, untilMs);
-      if (hit.kind === "CHARACTER") { const owner = s.players[s.characters[hit.id]!.playerId]; if (owner) owner.moveDir = { x: 0, z: 0 }; this.dirty.characters.add(hit.id); }
+      if (hit.kind === "CHARACTER") { const owner = s.players[s.characters[hit.id]!.playerId]; if (owner) owner.moveDir = { x: 0, z: 0 }; this.dirty.characters.add(hit.id);
+        // Stunning a crewmate is allowed and remembered: a capture soon after is a double-cross.
+        if (owner && this.crewOf.get(owner.id) && this.crewOf.get(owner.id) === this.crewOf.get(player.id)) this.crewStunAt.set(`${player.id}>${owner.id}`, now); }
       else { const n = s.npcs[hit.id]!; n.lastCaptureAttemptAtMs = Math.max(n.lastCaptureAttemptAtMs, untilMs - RULES.captureCooldownMs); this.dirty.agents.add(hit.id); }
       this.emit("STUNNED", hit.id, { targetId: hit.id, targetName: hit.name, targetKind: hit.kind, untilMs, byId: c.id }, opts);
     }
@@ -880,7 +971,8 @@ export class RoomEngine implements WorldPort {
 
   // ---------- views ----------
   characterView(c: CharacterState): CharacterView {
-    return { id: c.id, stunnedUntilMs: this.stunnedUntil.get(c.id) ?? null, ammo: this.ammo.get(c.id) ?? RULES.weapon.ammo, weaponReadyAtMs: this.weaponReadyAt.get(c.id) ?? 0, playerId: c.playerId, nickname: c.nickname, role: c.role, ticker: c.ticker, status: c.status, x: c.x, z: c.z, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), wanted: c.status === "WANTED", notorietyPoints: c.notorietyPoints, completedMissions: c.completedMissions, successfulEscapes: c.successfulEscapes, spawnTimeMs: c.spawnTimeMs, captureTimeMs: c.captureTimeMs, capturedBy: c.capturedBy };
+    const crew = this.crews.get(this.crewOf.get(c.playerId) ?? "");
+    return { id: c.id, crewId: crew?.id ?? null, crewName: crew?.name ?? null, stunnedUntilMs: this.stunnedUntil.get(c.id) ?? null, ammo: this.ammo.get(c.id) ?? RULES.weapon.ammo, weaponReadyAtMs: this.weaponReadyAt.get(c.id) ?? 0, playerId: c.playerId, nickname: c.nickname, role: c.role, ticker: c.ticker, status: c.status, x: c.x, z: c.z, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), wanted: c.status === "WANTED", notorietyPoints: c.notorietyPoints, completedMissions: c.completedMissions, successfulEscapes: c.successfulEscapes, spawnTimeMs: c.spawnTimeMs, captureTimeMs: c.captureTimeMs, capturedBy: c.capturedBy };
   }
   missionView(id: string): MissionView { const m = this.state.missions[id]!; return { id: m.id, x: m.x, z: m.z, label: m.label, status: m.status, completedByCharacterId: m.completedByCharacterId }; }
   agentView(id: string): AgentView {
@@ -911,6 +1003,7 @@ export class RoomEngine implements WorldPort {
       listings: Object.keys(s.listings).map((t) => this.deps.economy.listingView(s, t, now)).filter((x): x is ListingView => !!x),
       trades: s.trades.slice(-60), recentEvents: this.events.slice(-300), metrics: this.deps.metrics.view(),
       experiments: this.deps.experiments?.() ?? [], policy: this.deps.policy?.view() ?? null,
+      crews: [...this.crews.values()].map((k) => ({ ...k, memberPlayerIds: [...k.memberPlayerIds] })),
     };
   }
 }

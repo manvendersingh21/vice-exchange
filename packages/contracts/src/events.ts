@@ -40,7 +40,13 @@ export interface EventPayloads {
     captorId: EntityId; captorName: string; captorKind: ActorKind; captorWalletId: string | null;
     bounty: number; captorBalanceAfter: number | null;
     referenceAtCapture: number; spotBeforeCapture: number; survivalSeconds: number;
+    /** Present when the captor is in a crew: every wallet credited by this capture (captor first). Sums to `bounty`. */
+    shares?: Array<{ playerId: EntityId; walletId: string; amount: number; balanceAfter: number }>;
+    crewId?: string | null; crewName?: string | null; doubleCross?: boolean;
   };
+  CREW_JOINED: { crewId: string; crewName: string; playerId: EntityId; nickname: string; created: boolean; memberPlayerIds: EntityId[] };
+  CREW_LEFT: { crewId: string; crewName: string; playerId: EntityId; nickname: string; reason: "LEFT" | "SWITCHED" | "EJECTED"; memberPlayerIds: EntityId[] };
+  CREW_BETRAYED: { crewId: string; crewName: string; betrayerPlayerId: EntityId; betrayerName: string; victimPlayerIds: EntityId[]; victimNames: string[]; bounty: number };
   /** A stun pulse was fired. Nobody is hurt: a hit only stuns. hitId is null on a miss. */
   WEAPON_FIRED: { shooterId: EntityId; shooterName: string; shooterKind: ActorKind; x: number; z: number; toX: number; toZ: number; hitId: EntityId | null; hitKind: "CHARACTER" | "NPC" | null; ammoLeft: number };
   STUNNED: { targetId: EntityId; targetName: string; targetKind: "CHARACTER" | "NPC"; untilMs: number; byId: EntityId };
@@ -57,7 +63,7 @@ export const EVENT_TYPES = [
   "LISTING_OPENED", "MISSION_SPAWNED", "MISSION_COMPLETED", "INCIDENT_OCCURRED", "NPC_OBSERVED",
   "AGENT_MESSAGE_SENT", "AGENT_MESSAGE_DELIVERED", "BULLETIN_PUBLISHED", "DECISION_REQUESTED", "DECISION_RESOLVED",
   "AGENT_ACTION_APPLIED", "AGENT_ACTION_REJECTED", "MARKET_PRICE_UPDATED", "TRADE_EXECUTED", "TRADE_REJECTED",
-  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "WEAPON_FIRED", "STUNNED", "LISTING_HALTED",
+  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "WEAPON_FIRED", "STUNNED", "CREW_JOINED", "CREW_LEFT", "CREW_BETRAYED", "LISTING_HALTED",
   "CHARACTER_ARCHIVED", "CHARACTER_RESPAWNED", "POLICY_INGESTED",
 ] as const satisfies readonly EventType[];
 

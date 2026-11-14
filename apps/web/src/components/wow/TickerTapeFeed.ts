@@ -176,6 +176,8 @@ export function headlineFor(e: GameEvent, s: GameState, ctx: Ctx): Headline | nu
       const parts = [subject, t(" "), v("CAPTURED"), t(" by "), nm(p.captorName)];
       if (p.ticker) parts.push(t(": "), cash(p.spotBeforeCapture), t(" → "), cash(0));
       if (p.bounty > 0) parts.push(t(" · bounty "), cash(p.bounty));
+      if (p.doubleCross) parts.push(t(" · "), v("DOUBLE-CROSS"), t(` in crew ${p.crewName}: took it all`));
+      else if (p.shares && p.shares.length > 1) parts.push(t(` · split ${p.shares.length} ways in crew ${p.crewName}`));
       return make(e, "capture", "CAPTURED", 3, parts, { ticker: p.ticker, agentId: s.npcs[p.captorId] ? p.captorId : null });
     }
     case "INCIDENT_OCCURRED": {

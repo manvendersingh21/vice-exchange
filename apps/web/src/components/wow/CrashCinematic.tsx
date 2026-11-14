@@ -51,6 +51,8 @@ export interface CrashShot {
   lastSpot: number;
   referenceAtCapture: number | null;
   bounty: number | null;
+  /** Crew capture: how the bounty was paid out. */
+  bountyNote: string | null;
   captorName: string | null;
   /** "POLICE NPC", "HUMAN HUNTER", ... derived from captorKind plus the captor's role in the store. */
   captorLabel: string | null;
@@ -84,6 +86,7 @@ export function buildCrashShot(tr: CrashTrigger, s: ShotSource): CrashShot {
     lastSpot: halt?.finalSpotBeforeHalt ?? cap?.spotBeforeCapture ?? listing?.finalSpotBeforeHalt ?? history[history.length - 1]?.spot ?? 0,
     referenceAtCapture: cap ? cap.referenceAtCapture : null,
     bounty: cap ? cap.bounty : null,
+    bountyNote: !cap ? null : cap.doubleCross ? `DOUBLE-CROSS: took it all from crew ${cap.crewName}` : cap.shares && cap.shares.length > 1 ? `split ${cap.shares.length} ways in crew ${cap.crewName}` : null,
     captorName: cap ? cap.captorName : null,
     captorLabel, captorIsNpc: cap ? cap.captorKind === "NPC" : null,
     survivalSeconds: cap ? cap.survivalSeconds : null,
@@ -107,7 +110,7 @@ function statsOf(shot: CrashShot): Stat[] {
       sub: shot.captorLabel ? <span className={`cc-chip ${shot.captorIsNpc ? "npc" : "human"}`}>{shot.captorLabel}</span> : "",
     });
   }
-  if (shot.bounty != null) out.push({ k: "Bounty paid", v: vd(shot.bounty), sub: shot.bounty > 0 ? "credited to the captor" : "none paid" });
+  if (shot.bounty != null) out.push({ k: "Bounty paid", v: vd(shot.bounty), sub: shot.bountyNote ?? (shot.bounty > 0 ? "credited to the captor" : "none paid") });
   if (shot.survivalSeconds != null) out.push({ k: "Survived", v: duration(shot.survivalSeconds), sub: "spawn to capture" });
   if (shot.referenceAtCapture != null) out.push({ k: "Reference", v: vd(shot.referenceAtCapture), sub: "value at capture" });
   out.push({ k: "Spot before", v: vd(shot.lastSpot), sub: "last price, now V$0" });
