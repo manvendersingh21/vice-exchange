@@ -60,3 +60,56 @@ cd integrations/open-theft-auto && godot --headless --path . --export-release "W
 Output goes to `apps/web/public/world/` (git-ignored, about 400 MB). Open `http://localhost:5173/?...&view=world`
 or press WORLD in the header. The client connects to `ws://<page host>:3001/bridge`; override with `&bridge=ws://host:port/bridge`.
 On the web it runs single-threaded on the Compatibility renderer with background life and real-time shadows off and 3D at 60% scale.
+
+## Guns, cars and the helicopter (added 2026-11-14)
+
+- **Gun.** You start with the pistol. **Left mouse** (the game's normal trigger, mouse captured) fires the server's stun
+  pulse along your aim: 16 m range, 6 charges, 2.5 s recharge, a hit knocks a player or a police officer down for 3 s,
+  nobody is hurt. The city's own bullets, damage and wanted stars never run in VICE mode (`apply.py` routes
+  `_fire_weapon` to the bridge), so nothing is hit locally that the server does not know about. Every client sees the
+  tracer, the muzzle flash, the stun ring and a "STUNNED" tag; the HUD shows `PULSE n/6` and the recharge. An outlaw's
+  shot raises heat and is witnessed by the swarm NPCs, who then decide with Drex as for any incident.
+- **Cars.** **F** next to a car takes it (the city's own enter/exit); WASD drives. Your position keeps going to the
+  server, so other clients see you move at car speed and show you in a car with a "DRIVING" tag (inferred from speed,
+  above about 13 m/s). Leaving the mapped district pins you at its edge on the server and the HUD says
+  `OUT OF THE DISTRICT`; you stay joined.
+- **Helicopter.** One flyable helicopter is parked inside the district (sim 62,54, a few metres north of the outlaw
+  spawn). **F** boards, **Up / Down arrows** climb and descend, WASD flies. The server only tracks your ground position.
+- Flags: `--vice-no-guns`, `--vice-no-heli`. The web (WORLD view) build has no helicopter.
+- Verified with two real clients on a private server (`--vice-demo=gun|victim|car|watch|heli`, frames with
+  `--vice-shots=<dir>`): pulse fired, STUNNED received, victim held at 0.00 m for the stun; car entered and driven
+  108 sim m in 6 s; remote client flagged the driver as in a car; helicopter boarded and climbed to 110 m.
+  Stills `frames/30_*.png`, `31_*.png`, `32_*.png`; clip `frames/vice_exchange_3d_guns_cars_heli.mp4` (22 s).
+- Not verified / limits: the shots in those runs were sent by the test driver through the same `fire()` path the patched
+  trigger calls, not by a physical mouse click; the knocked-down figure still looks upright on other clients (tag and
+  ring show the stun); the remote car model was detected but not confirmed on a frame; altitude is not networked, so a
+  flying player appears on the ground to others and can still be stunned or captured from below; the server does not
+  check Godot buildings or the browser map's parked cars for bridge clients; a few poses are rejected while speeding
+  out of the district (2 in the car run, 7 in the helicopter run) and are simply resent.
+
+## UDP fast path (native client only)
+
+The WebSocket at `/bridge` stays the reliable channel: join, commands and their acks, events, the room state, wallet.
+High-rate, loss-tolerant traffic goes over UDP when it is available:
+
+| Direction | What | Rate | Format |
+|---|---|---|---|
+| client -> server | your pose (x, z, heading, flags: 1 in a car, 2 airborne) | up to 30 Hz (one per rendered frame at most) | `<32 hex token>{"q":seq,"x":..,"z":..,"h":..,"f":..}` |
+| server -> client | positions of characters and NPCs, heat, status, activity, pending, stunned | 30 Hz | `{"q":seq,"t":ms,"hz":30,"c":[...],"n":[...]}` |
+
+- Port: `UDP_PORT` if set, otherwise the HTTP port + 1 (server on 3001 -> UDP 3002). `VICE_UDP=0` turns the server side off.
+  If the port cannot be bound the server logs it and everyone stays on WebSocket.
+- Handshake: after a WebSocket join the server sends `{ t: "udp", port, token, hz }`. The token (16 random bytes) only
+  selects that already-joined session; the client's address is learned from its first datagram and re-learned if it changes.
+- Trust: a UDP pose goes through the same `player.pose` validation as a WebSocket pose (command schema, then the engine's
+  bounds and speed checks). Unknown tokens, oversized (> 1200 bytes) or malformed datagrams and out-of-order sequence
+  numbers are dropped; each session is rate-limited (90 datagrams/s).
+- 30 Hz from a 10 Hz engine: pose-driven players are sampled as they are (their poses land in room state at once);
+  NPCs and server-integrated walkers are dead-reckoned between engine ticks from their last measured velocity, for at
+  most 120 ms and never across a jump. The client's existing smoothing interpolates toward each new state.
+- Fallback: no datagram from the server within 2 s of the offer, or 1.5 s of silence later, and the client uses the
+  10 Hz WebSocket ticks again without disconnecting. `--vice-no-udp` forces that. The HUD title shows
+  `NET: UDP 30 Hz  loss n%  age n ms` or `NET: WS 10 Hz`; `/health` reports `udp: { enabled, port, clients }`.
+- The browser-embedded WORLD view cannot use UDP (browsers have no UDP sockets); it always uses WebSocket.
+- Measured 2026-11-14, headless client on this Mac, same scripted check run: 290 world-state updates over UDP
+  (29 Hz, 0% loss) against 105 over WebSocket.
