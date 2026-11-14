@@ -64,3 +64,20 @@ Verification commands: add `--vice-check` (headless ok), `--vice-hunt`, `--vice-
   room does not survive a server restart (the client makes a new one); about 40 fps while recording at 1280x720.
 - `vice_bridge.gd` was edited by two contributors at once after 13:05 and broke twice from merged edits; before the
   demo run `godot --headless --path integrations/open-theft-auto --quit` and check for "Parse Error".
+
+## Guns, cars, helicopter (GODOT2, 13:55)
+Same launch commands as above. Keys added: **left mouse** fires the stun pulse (pistol in hand by default), **F** takes a
+car or boards the helicopter parked at sim (62,54), **Up / Down** climb and descend. Flags `--vice-no-guns`, `--vice-no-heli`.
+Verified with two real clients on a private server; details and limits in `integrations/ota-bridge/README.md`.
+Clip: `integrations/ota-bridge/frames/vice_exchange_3d_guns_cars_heli.mp4` (22 s). No server change: port 3001 needs
+no restart for this (it already has `weapon.fire`).
+
+## UDP fast path (agent UDP, 13:56)
+- Server `apps/server/src/bridge/udp.ts` (hooked from `bridge/index.ts`), Godot `integrations/ota-bridge/vice_udp.gd`
+  (copied by `apply.py`, loaded by `vice_bridge.gd`). Tests: `apps/server/test/udp.test.ts` (8).
+- Port = `UDP_PORT` or HTTP port + 1 (3001 -> 3002). Off switches: server `VICE_UDP=0`, client `--vice-no-udp`.
+- Poses up and world state down at 30 Hz over UDP; everything reliable stays on the WebSocket. Details and wire format
+  in `integrations/ota-bridge/README.md`. The web WORLD embed stays on WebSocket.
+- Verified with a real headless Godot client: NET live at 29 Hz, 0% loss, 290 state updates vs 105 over WebSocket in the
+  same check run; `--vice-no-udp` run completed on WebSocket. Not verified: a windowed two-client visual comparison,
+  and the mid-session drop back to WebSocket (logic only).
