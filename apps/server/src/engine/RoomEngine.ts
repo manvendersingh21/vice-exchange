@@ -31,6 +31,9 @@ const PURSUIT_LOST_MS = 5000;
 const INVESTIGATE_LINGER_MS = 4000;
 const INVESTIGATE_GIVE_UP_MS = 120000;
 const RADIUS = 0.6;
+/** player.pose: a browser client may report at most this multiple of walking speed; the budget never banks more than this many seconds. */
+const POSE_FOOT_FACTOR = 1.25;
+const POSE_BURST_SEC = 0.4;
 /** Solid parked cars: players and NPCs stop at these footprints exactly as at buildings. They never block line of sight. */
 const CAR_RECTS = carRects();
 /** The full log lives in the store; memory keeps the recent tail for snapshots, replay checks and experiments. */
@@ -59,6 +62,7 @@ export class RoomEngine implements WorldPort {
   private bulletinAt = new Map<string, number>();
   private captureAttemptAt = new Map<string, number>();
   private poseAt = new Map<string, number>();
+  private poseBudget = new Map<string, { metres: number; at: number }>();
   /** Per-officer chase/search record. `departAtMs` is when an investigation actually sets off (dispatch delay); `pace` is its walking speed. */
   private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null; departAtMs: number; pace: number }>();
   private storyOf = new Map<string, string>();
@@ -208,7 +212,7 @@ export class RoomEngine implements WorldPort {
     };
     this.events = [];
     this.lastTickAtMs = now; this.nextMissionAtMs = null; this.nextMissionSpot = 0; this.policyAnnounced = false;
-    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav, this.wantedEventOf, this.sightingEventOf, this.actionEventOf]) m.clear();
+    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav, this.wantedEventOf, this.sightingEventOf, this.actionEventOf, this.poseBudget]) m.clear();
   }
   private bootRun(first: boolean, previousRunId?: string): void {
     const s = this.state;
@@ -363,14 +367,21 @@ export class RoomEngine implements WorldPort {
       case "player.pose": {
         if (!this.live(c)) return fail(id, "CHARACTER_INACTIVE", "No active character");
         const now = this.now(); const w = CITY_MAP.walkable;
-        // Speed check against the time since the server last accepted a position for this character (or since it spawned).
-        const dt = Math.max(0.05, (now - (this.poseAt.get(c.id) ?? c.spawnTimeMs)) / 1000);
         if (cmd.x < w.x0 || cmd.x > w.x1 || cmd.z < w.z0 || cmd.z > w.z1) return fail(id, "MOVE_REJECTED", "Outside the map");
-        if (dist(c, cmd) / dt > RULES.maxPoseSpeed) return fail(id, "MOVE_REJECTED", "Too fast");
-        // Browser clients share the server's map, so a reported pose may not be inside a building.
-        // External 3D worlds (bridge clients) own their geometry and are only bounds- and speed-checked.
-        if (!this.viaExternal && !player.socketId?.startsWith("bridge:") && this.blocked(cmd.x, cmd.z)) return fail(id, "MOVE_REJECTED", CAR_RECTS.some((r) => insideRect(cmd, r, RADIUS)) ? "Inside a parked car" : "Inside a building");
-        this.poseAt.set(c.id, now); c.x = cmd.x; c.z = cmd.z; player.moveDir = { x: 0, z: 0 };
+        // External 3D worlds (bridge clients) own their geometry and may drive; browser clients share the server's map and walk.
+        const external = this.viaExternal || !!player.socketId?.startsWith("bridge:");
+        if (!external && this.blocked(cmd.x, cmd.z)) return fail(id, "MOVE_REJECTED", CAR_RECTS.some((r) => insideRect(cmd, r, RADIUS)) ? "Inside a parked car" : "Inside a building");
+        // Distance budget: metres accrue with real elapsed time at the speed ceiling and are capped at a short burst
+        // window. Standing still never banks a teleport, and many small steps in one instant cannot add up.
+        const speed = external ? RULES.maxPoseSpeed : RULES.playerSpeed * POSE_FOOT_FACTOR;
+        const prev = this.poseBudget.get(c.id) ?? { metres: 0, at: c.spawnTimeMs };
+        const metres = Math.min(speed * POSE_BURST_SEC, prev.metres + speed * Math.max(0, now - prev.at) / 1000);
+        const d = dist(c, cmd);
+        if (d > metres) { this.poseBudget.set(c.id, { metres, at: now }); return fail(id, "MOVE_REJECTED", "Too fast"); }
+        // For the rules an external character stands at the nearest open point, so it can always be seen and captured.
+        const at = external && this.blocked(cmd.x, cmd.z) ? this.nearestOpen(cmd.x, cmd.z) : { x: cmd.x, z: cmd.z };
+        this.poseBudget.set(c.id, { metres: metres - d, at: now });
+        this.poseAt.set(c.id, now); c.x = at.x; c.z = at.z; player.moveDir = { x: 0, z: 0 };
         return ack(id);
       }
       case "mission.interact": return this.missionInteract(player, c, cmd.missionId, id);
@@ -607,6 +618,21 @@ export class RoomEngine implements WorldPort {
     const w = CITY_MAP.walkable;
     if (x < w.x0 || x > w.x1 || z < w.z0 || z > w.z1) return true;
     return CITY_MAP.buildings.some((b) => insideRect({ x, z }, b, RADIUS)) || CAR_RECTS.some((r) => insideRect({ x, z }, r, RADIUS));
+  }
+  /** Nearest point outside every building and parked car, inside the map. */
+  private nearestOpen(x: number, z: number): Vec2 {
+    let p: Vec2 = { x, z };
+    const pad = RADIUS + 0.05;
+    for (let i = 0; i < 6 && this.blocked(p.x, p.z); i++) {
+      const here = p;
+      const r = [...CITY_MAP.buildings, ...CAR_RECTS].find((b) => insideRect(here, b, RADIUS));
+      if (!r) break;
+      const exits: Vec2[] = [{ x: r.x0 - pad, z: here.z }, { x: r.x1 + pad, z: here.z }, { x: here.x, z: r.z0 - pad }, { x: here.x, z: r.z1 + pad }];
+      exits.sort((a, b) => dist(a, here) - dist(b, here));
+      p = exits.find((e) => !this.blocked(e.x, e.z)) ?? exits[0]!;
+    }
+    const w = CITY_MAP.walkable;
+    return { x: Math.max(w.x0, Math.min(w.x1, p.x)), z: Math.max(w.z0, Math.min(w.z1, p.z)) };
   }
   /** Axis-separated move with sliding. Returns true if the entity moved at all. */
   private step(e: Vec2, nx: number, nz: number): boolean {
