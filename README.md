@@ -6,7 +6,7 @@ VICE EXCHANGE is a multiplayer simulation set in an original neon city, Coral Ba
 
 ## What works today
 
-Status was recorded on 2026-11-14. "Automated test" means `npm test` (144 tests passing at 13:05 local). "E2E" means the two-browser harness `npm run e2e` (report started 21:04 UTC, `e2e/out/report.json`): all 12 scenario steps passed and one extra socket-level check failed, listed under Known limitations.
+Status was recorded on 2026-11-14. "Automated test" means `npm test` (150 tests passing when run for this document at 13:09 local). "E2E" means the two-browser harness `npm run e2e` (report started 21:04 UTC, `e2e/out/report.json`): all 12 scenario steps passed and one extra socket-level check failed, listed under Known limitations.
 
 | Feature | Status | Evidence |
 |---|---|---|
@@ -24,7 +24,7 @@ Status was recorded on 2026-11-14. "Automated test" means `npm test` (144 tests 
 | NDI document grounding for police decisions | Verified by a live run and automated test | `.swarm/board/NDI.md`; `apps/server/src/policy/*.test.ts` |
 | 2D city, 3D browser view, inspector, timeline, director panel | Verified by E2E (rendered and captured) | E2E S12 |
 | Godot 3D world client | Verified by scripted live runs, not by a human at the keyboard | `.swarm/board/GODOT.md` |
-| Swarm graph, decision cards, crash cinematic, ticker tape (`apps/web/src/components/wow`) | Implemented but unverified; not confirmed mounted when this was written | source files only |
+| Swarm graph, decision cards, crash cinematic, ticker tape (`apps/web/src/components/wow`) | Implemented and imported by the app; typecheck and build pass; not covered by the E2E report and not visually verified for this document | `apps/web/src/App.tsx` imports |
 
 ## Quick start
 
@@ -61,9 +61,9 @@ Demo-director controls (seeded reset, incident trigger, mode switch, experiment)
 |---|---|---|
 | `npm run dev` | Server (watch mode) and web app together | Not run for this document: ports 3001 and 5173 were in use by the running demo |
 | `npm run dev:server`, `npm run dev:web` | Each half alone | Not run (same reason) |
-| `npm run start:server` | Server without watch mode | Run on a spare port, see below |
+| `npm run start:server` | Server without watch mode | Run on a spare port, see below; `/health` answered |
 | `npm run typecheck` | TypeScript check of every workspace | Run |
-| `npm test` | Server test suite (vitest) | Run: 144 passed |
+| `npm test` | Server test suite (vitest) | Run: 150 passed |
 | `npm run build` | Production build of the web app | Run |
 | `npm run e2e` | Two-browser end-to-end harness on its own ports; writes `e2e/out/` | Not re-run for this document; the report cited above is its output |
 | `npm run replay` | Lists recorded runs; `npm run replay -- <roomCode> [runId]` prints a run's projection from SQLite | Run |

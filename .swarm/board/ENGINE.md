@@ -48,7 +48,10 @@ round trip per provider call as recorded on each decision trace; time to capture
   2. nickname + role of a DISCONNECTED player -> reclaims that player, character and ticker with a NEW token (also when that character is
      captured, so they respawn instead of spawning a twin). Director only if the join presents the director secret.
   3. otherwise a fresh player; a nickname already in the room is suffixed (Ace -> Ace2). ROOM_FULL at 8 connected humans.
-- Director: creator of a `room.create` room; first browser joiner of the boot-time room VICE-42 (never a `bridge:` client); anyone presenting the director secret.
+- Director: creator of a `room.create` room; the first browser ON THE SERVER'S OWN MACHINE to join the boot-time room VICE-42 (loopback
+  peer and a localhost page origin; never a LAN visitor, never a `bridge:` client); anyone presenting the director secret.
+- Rooms: at most 8 live rooms including VICE-42 (`room.create` then answers ROOM_FULL "Too many rooms"); a created room with no connected
+  human for 3 minutes is closed (timer stopped, decisions cancelled); its history stays in the store. VICE-42 is never closed.
 - Server -> client: `room.snapshot` (join, reset, respawn, player join/leave, policy loaded), `world.tick` 10 Hz, `event` (one GameEvent per emit,
   strictly in serverSequence order), `agent.update`, `listing.update`, `character.update`, `mission.update`, private `wallet.update`,
   `provider.status` + `metrics.update` once per second, `experiment.update` every 2 s while an experiment runs.
@@ -94,6 +97,10 @@ round trip per provider call as recorded on each decision trace; time to capture
   3 s after every lane is captured, whichever comes first.
 
 ## Not done / known limits
+- The command rate limit is per socket (40/s); there is no cap on sockets per address.
+- "Own machine" is judged from the TCP peer, `x-forwarded-for` and the page origin. The Vite dev proxy does not add `x-forwarded-for`,
+  so a non-browser client on the LAN that forges a localhost Origin through :5173 would pass; set `xfwd: true` on the proxy
+  (apps/web/vite.config.ts, not my file) or set DEMO_DIRECTOR_SECRET to close that.
 - A disconnected player's avatar and ticker stay in the world (capturable, still accruing survival value) until reclaimed by nickname or `demo.reset`.
 - The live room's Meta shadow and an experiment's Meta lane share Meta's real 60 requests/min; running both at once can produce labeled Meta fallbacks.
 - `player.pose` from bridge (Godot) clients is bounds- and speed-checked only. NPCs do not avoid each other or players.

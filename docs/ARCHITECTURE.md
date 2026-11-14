@@ -105,7 +105,7 @@ Clients emit one Socket.IO event, `command`, with an acknowledgement (`packages/
 
 Server pushes: `room.snapshot`, `world.tick` (10 Hz), `event`, `agent.update`, `listing.update`, `character.update`, `mission.update`, `wallet.update` (owner only), `provider.status`, `metrics.update`, `experiment.update`.
 
-HTTP: `/health`, `/api/rooms/:code/snapshot`, `/api/rooms/:code/events`, `/api/rooms/:code/agents/:id/trace`, `/api/rooms/:code/replay/verify`, `/api/experiments`, `/api/policy`.
+HTTP: `/health`, `/api/rooms/:code/snapshot`, `/api/rooms/:code/events`, `/api/rooms/:code/agents/:id/trace`, `/api/rooms/:code/replay/verify`, `/api/experiments`, `/api/policy`, `/api/policy/xray.svg`.
 
 ## State machines
 

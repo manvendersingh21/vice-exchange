@@ -49,7 +49,8 @@ function simulate(lifeSec: number, missions: number[], reports: number[], trades
   }
   return { history, reference, spot, heat };
 }
-const ACE = simulate(LIFE, [20, 52, 96, 141, 183], [58, 150, 188, 204], [[24, 1], [56, 1], [101, 1], [118, 1], [158, -1], [192, -1], [207, -1]]);
+// A typical demo arc: jobs lift the reference, one early report cools the price, the last report makes Ace wanted.
+const ACE = simulate(LIFE, [20, 52, 96, 141, 183], [58, 196], [[24, 1], [56, 1], [101, 1], [118, 1], [158, -1], [192, -1], [207, -1]]);
 const BLZ = simulate(118, [14, 61], [70, 104], [[18, 1], [75, -1]]);
 
 // ---------------------------------------------------------------- world
