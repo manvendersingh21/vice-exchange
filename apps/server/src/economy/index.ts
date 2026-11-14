@@ -35,10 +35,11 @@ export function sentimentFactor(netBuyUnits: number): number {
   return clamp(1 + s.perNetUnit * netBuyUnits, s.min, s.max);
 }
 
-function netUnits(listing: ListingState, nowMs: number): number {
+/** Net signed units in the sentiment window; with `exceptWalletId`, as if that wallet's own orders had never happened. */
+function netUnits(listing: ListingState, nowMs: number, exceptWalletId?: string): number {
   const cutoff = nowMs - P.sentiment.windowMs;
   let net = 0;
-  for (const d of listing.demand) if (d.atMs > cutoff) net += d.units;
+  for (const d of listing.demand) if (d.atMs > cutoff && (exceptWalletId === undefined || d.walletId !== exceptWalletId)) net += d.units;
   return net;
 }
 
@@ -48,9 +49,9 @@ function pruneDemand(listing: ListingState, nowMs: number): void {
 }
 
 /** Non-mutating quote. */
-function compute(state: RoomState, listing: ListingState, nowMs: number): Quote {
+function compute(state: RoomState, listing: ListingState, nowMs: number, exceptWalletId?: string): Quote {
   const character = state.characters[listing.characterId];
-  const net = netUnits(listing, nowMs);
+  const net = netUnits(listing, nowMs, exceptWalletId);
   if (listing.status === "HALTED_CAPTURED" || !character) {
     return {
       referenceValue: listing.referenceValue, spotPrice: 0, bid: 0, ask: 0,
@@ -155,7 +156,12 @@ export function createEconomy(): EconomyPort {
       if (last !== undefined && nowMs - last < T.cooldownMs) return { ok: false, reason: "COOLDOWN", message: `One order per ${T.cooldownMs / 1000}s per ticker` };
       const q = compute(state, listing, nowMs);
       const held = wallet.holdings[order.ticker]?.shares ?? 0;
-      const price = order.side === "BUY" ? q.ask : q.bid;
+      // Anti-echo fill: a wallet never gets a better price than the market would quote without its own recent orders.
+      // It still pays its own impact (the public quote), but it cannot buy into the dip its own sells made or sell into
+      // the bump its own buys made. Without this a lone wallet could farm the house by trading against the expiry of
+      // its own sentiment entries.
+      const own = compute(state, listing, nowMs, wallet.id);
+      const price = order.side === "BUY" ? Math.max(q.ask, own.ask) : Math.min(q.bid, own.bid);
       const total = price * order.qty;
       if (order.side === "BUY") {
         if (held + order.qty > T.maxSharesPerTicker) return { ok: false, reason: "POSITION_LIMIT", message: `Max ${T.maxSharesPerTicker} shares per ticker` };
@@ -181,7 +187,7 @@ export function createEconomy(): EconomyPort {
       if (holding.shares === 0) delete wallet.holdings[order.ticker];
       else wallet.holdings[order.ticker] = holding;
       wallet.lastOrderAtMs[order.ticker] = nowMs;
-      listing.demand.push({ atMs: nowMs, units: order.side === "BUY" ? order.qty : -order.qty });
+      listing.demand.push({ atMs: nowMs, units: order.side === "BUY" ? order.qty : -order.qty, walletId: wallet.id });
       listing.volume += order.qty;
       const trade = {
         tradeId: order.tradeId, atMs: nowMs, actorId: order.actorId, actorName: order.actorName, actorKind: order.actorKind,

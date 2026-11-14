@@ -228,7 +228,11 @@ describe("AT-04: shared market integrity", () => {
     const q = t.engine.deps.economy.quote(t.engine.state, ticker, t.clock.now())!;
     const bal = walletOf(t, a.id).balanceCredits;
     expect(t.cmd(a.id, { type: "market.sell", ticker, qty: 1 }).ok).toBe(true);
-    expect(walletOf(t, a.id).balanceCredits).toBe(bal + q.bid);
+    // Anti-echo fill: after ten buys of its own, the wallet sells at the bid the market would show without its own
+    // orders, which is below the public bid those buys inflated. Never above the quote.
+    const got = walletOf(t, a.id).balanceCredits - bal;
+    expect(got).toBeGreaterThan(0);
+    expect(got).toBeLessThan(q.bid);
     expect(q.bid).toBeLessThan(q.ask);
 
     // Not enough credits.

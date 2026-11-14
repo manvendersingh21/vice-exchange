@@ -34,7 +34,7 @@ export interface ListingState {
   referenceValue: number; spotPrice: number; openedAtMs: number; haltedAtMs: number | null;
   finalSpotBeforeHalt: number | null; history: PricePoint[];
   /** Signed units inside the rolling sentiment window (+buy, -sell). */
-  demand: Array<{ atMs: number; units: number }>;
+  demand: Array<{ atMs: number; units: number; walletId?: string }>;
   volume: number;
 }
 export interface WalletState {
@@ -155,6 +155,8 @@ export interface WorldPort {
   setNpcActivity(npcId: EntityId, activity: NpcActivity, target: { moveTarget?: Vec2 | null; targetCharacterId?: EntityId | null }): void;
   /** Police make a character wanted: raises heat, emits WANTED_STATUS_CHANGED + BULLETIN_PUBLISHED, writes WANTED_BULLETIN memories (sourceKind BULLETIN) to every NPC. No-op if a bulletin for that character is still fresh. */
   publishBulletin(policeNpcId: EntityId, characterId: EntityId, lastKnown: Vec2, opts: EmitOpts): void;
+  /** Hunter crews are public knowledge (joining is announced). Optional so test doubles need not implement it. */
+  hunterCrews?(): Array<{ id: string; name: string; memberPlayerIds: EntityId[] }>;
   /** Public market info any trader may see (never private memories). */
   marketSummary(ticker: string): { ticker: string; status: ListingStatus; spotPrice: number; referenceValue: number; changePct60s: number; netBuyUnits: number } | null;
 }

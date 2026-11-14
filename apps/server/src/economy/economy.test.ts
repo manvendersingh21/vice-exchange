@@ -146,9 +146,12 @@ describe("trading", () => {
     const r = eco.executeOrder(state, order("SELL"), t1);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.trade.executionPrice).toBe(bid);
+    // Anti-echo fill: the public bid (95) is lifted by this wallet's own buy; it sells at the bid the market would
+    // show without its own order, floor(95 * 0.97) = 92, never into its own bump.
+    expect(bid).toBe(95);
+    expect(r.trade.executionPrice).toBe(92);
     expect(r.sharesAfter).toBe(0);
-    expect(r.balanceAfter).toBe(2000 - 95 + bid);
+    expect(r.balanceAfter).toBe(2000 - 95 + 92);
     expect(state.wallets["w_a"]!.holdings["ACE-01"]).toBeUndefined();
     expect(eco.quote(state, "ACE-01", t1)!.netBuyUnits).toBe(0);
   });
@@ -307,5 +310,45 @@ describe("capture halt and bounty", () => {
     const { state, c } = setup();
     expect(() => eco.openListing(state, outlaw({ id: "chr_h", role: "HUNTER", ticker: null }), T0)).toThrow();
     expect(() => eco.openListing(state, c, T0)).toThrow();
+  });
+});
+
+// Audit finding (economy reviewer): a lone wallet could farm the house risk-free by trading against the expiry of its
+// own sentiment entries (+V$263 per 80 s at a V$95 spot): buy while its own old sells depress the price, sell while its
+// own old buys inflate it.
+describe("anti-echo fills", () => {
+  it("a lone wallet cycling buys and sells against its own sentiment window never profits", () => {
+    const { state, c } = setup();
+    const start = state.wallets["w_a"]!.balanceCredits;
+    let now = T0;
+    const freeze = () => { c.spawnTimeMs = now; }; // hold the reference at its base so only sentiment moves the price
+    const burst = (side: "BUY" | "SELL") => {
+      for (let i = 0; i < 10; i++) { freeze(); const r = eco.executeOrder(state, order(side), now); expect(r.ok).toBe(true); now += RULES.trade.cooldownMs; }
+    };
+    for (let cycle = 0; cycle < 3; cycle++) {
+      burst("BUY");                    // t = 0..18 s
+      now += 22_000; burst("SELL");    // t = 40..58 s: own buys still in the window
+      now += 22_000;                   // t = 80 s: own buys have expired, own sells still in the window
+    }
+    expect(state.wallets["w_a"]!.holdings["ACE-01"]).toBeUndefined();
+    expect(state.wallets["w_a"]!.balanceCredits).toBeLessThan(start);
+  });
+
+  it("a wallet pays its own impact but never benefits from it; another wallet's orders still move its price", () => {
+    const { state } = setup();
+    eco.openWallet(state, { id: "w_b", ownerId: "ply_b", ownerKind: "HUMAN", ownerName: "B", balance: 2000 });
+    const b = (side: "BUY" | "SELL") => order(side, { walletId: "w_b", actorId: "ply_b", actorName: "B" });
+    // A buys twice: the second buy pays for the first one's impact (public ask 98, not 95).
+    expect((eco.executeOrder(state, order("BUY"), T0) as { trade: { executionPrice: number } }).trade.executionPrice).toBe(95);
+    expect((eco.executeOrder(state, order("BUY"), T0 + 2000) as { trade: { executionPrice: number } }).trade.executionPrice).toBe(98);
+    // A sells straight away: not into its own bump. Without A's two buys the spot is 95, so the bid is floor(95 * 0.97) = 92.
+    expect((eco.executeOrder(state, order("SELL"), T0 + 4000) as { trade: { executionPrice: number } }).trade.executionPrice).toBe(92);
+    // B was not part of that: B buys at the public ask, which still carries A's net +1.
+    const pub = eco.quote(state, "ACE-01", T0 + 4000)!;
+    expect((eco.executeOrder(state, b("BUY"), T0 + 4000) as { trade: { executionPrice: number } }).trade.executionPrice).toBe(pub.ask);
+    // And A now sells into B's demand (someone else's impact is real), but still without its own.
+    const r = eco.executeOrder(state, order("SELL"), T0 + 6000);
+    // Six seconds in, one survival step has lifted the reference to 102; only B's +1 counts for A.
+    expect(r.ok && r.trade.executionPrice).toBe(Math.floor(Math.round(102 * 0.95 * 1.03) * 0.97));
   });
 });
