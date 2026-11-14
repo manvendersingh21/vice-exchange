@@ -3,6 +3,7 @@ import { DEFAULT_ROOM_CODE, DEFAULT_SEED, RULES } from "@vice/contracts";
 import type { ClientCommand, CommandAck, DecisionMode, JoinResult } from "@vice/contracts";
 import type { BuiltRoom, RoomBuildOpts } from "../engine/compose";
 import type { RoomEngine } from "../engine/RoomEngine";
+import type { PlayerState } from "../domain";
 
 export interface Room extends BuiltRoom { code: string; timer: NodeJS.Timeout | null; hasDirector: boolean }
 type JoinCmd = Extract<ClientCommand, { type: "room.create" | "room.join" }>;
@@ -31,7 +32,25 @@ export class RoomManager {
     return timingSafeEqual(Buffer.from(given), Buffer.from(want));
   }
 
-  /** Handles room.create / room.join. Room code alone never grants director rights. */
+  /** Nicknames are unique per room: a taken name gets the smallest free numeric suffix (Ace -> Ace2). */
+  private uniqueNickname(want: string, players: PlayerState[]): string {
+    const taken = new Set(players.map((p) => p.nickname.toLowerCase()));
+    if (!taken.has(want.toLowerCase())) return want;
+    for (let n = 2; n < 1000; n++) {
+      const suffix = String(n); const candidate = want.slice(0, 16 - suffix.length) + suffix;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return want;
+  }
+
+  /**
+   * Handles room.create / room.join. Three ways in, in this order:
+   *  1. the same opaque session token re-attaches to the same player (refresh, network blip), director flag kept;
+   *  2. the nickname + role of a DISCONNECTED player reclaims that player, its character and its ticker with a new
+   *     token. A reclaim never carries director rights by itself: only the director secret does;
+   *  3. otherwise a fresh player (a taken nickname is suffixed).
+   * A room code alone never grants director rights.
+   */
   join(cmd: JoinCmd, socketId: string): CommandAck<JoinResult> & { room?: Room; playerId?: string } {
     const id = cmd.requestId;
     let room: Room | undefined; let creator = false;
@@ -44,20 +63,30 @@ export class RoomManager {
       if (!room) return { ok: false, id, error: { code: "ROOM_NOT_FOUND", message: `No room ${cmd.roomCode}` } };
     }
     const engine = room.engine;
-    const players = Object.values(engine.state.players);
-    const now = engine.now();
-    // Reconnect: same opaque session token, inside the grace window (or still connected from another tab).
-    const prior = cmd.type === "room.join" && cmd.sessionToken ? players.find((p) => p.sessionToken === cmd.sessionToken) : undefined;
-    if (prior && (prior.connected || now - (prior.disconnectedAtMs ?? now) <= RULES.reconnectGraceMs)) {
-      engine.reconnect(prior.id, socketId);
-      return { ok: true, id, room, playerId: prior.id, result: this.result(room, prior.id) };
+    const humans = Object.values(engine.state.players).filter((p) => !p.isBot);
+    const secret = this.secretOk(cmd.directorSecret);
+    const done = (playerId: string) => ({ ok: true as const, id, room, playerId, result: this.result(room!, playerId) });
+
+    if (cmd.type === "room.join") {
+      const byToken = cmd.sessionToken ? humans.find((p) => p.sessionToken === cmd.sessionToken) : undefined;
+      if (byToken) {
+        engine.reattach(byToken.id, socketId, { isDirector: byToken.isDirector || secret });
+        return done(byToken.id);
+      }
+      const name = cmd.nickname.toLowerCase();
+      const claim = humans.find((p) => !p.connected && p.role === cmd.role && p.nickname.toLowerCase() === name);
+      if (claim) {
+        engine.reattach(claim.id, socketId, { sessionToken: randomBytes(24).toString("hex"), isDirector: secret });
+        return done(claim.id);
+      }
     }
-    if (players.filter((p) => p.connected && !p.isBot).length >= RULES.maxPlayersPerRoom) return { ok: false, id, error: { code: "ROOM_FULL", message: "Room is full" } };
-    // The creator directs their room. The boot-time default room has no creator, so its first human joiner directs it.
-    const isDirector = creator || this.secretOk(cmd.directorSecret) || (!room.hasDirector && room.code === DEFAULT_ROOM_CODE);
+    if (humans.filter((p) => p.connected).length >= RULES.maxPlayersPerRoom) return { ok: false, id, error: { code: "ROOM_FULL", message: "Room is full" } };
+    // The creator directs their room. The boot-time default room has no creator, so its first browser joiner directs it
+    // (external world-bridge clients never take that slot). The slot is not handed out again once taken.
+    const isDirector = creator || secret || (!room.hasDirector && room.code === DEFAULT_ROOM_CODE && !socketId.startsWith("bridge:"));
     if (isDirector) room.hasDirector = true;
-    const p = engine.addPlayer({ nickname: cmd.nickname, role: cmd.role, isDirector, sessionToken: randomBytes(24).toString("hex"), socketId });
-    return { ok: true, id, room, playerId: p.id, result: this.result(room, p.id) };
+    const p = engine.addPlayer({ nickname: this.uniqueNickname(cmd.nickname, humans), role: cmd.role, isDirector, sessionToken: randomBytes(24).toString("hex"), socketId });
+    return done(p.id);
   }
 
   result(room: Room, playerId: string): JoinResult {

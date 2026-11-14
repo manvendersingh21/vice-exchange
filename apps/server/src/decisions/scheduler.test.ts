@@ -87,8 +87,14 @@ describe("scheduler", () => {
   });
 
   it("low confidence applies the safe action but keeps the real provider numbers", async () => {
-    const t = await run(make(fake("drex", async () => ok("report", 0.2))), req());
-    expect(t).toMatchObject({ decisionSource: "drex_low_confidence_guardrail", chosenAction: "ignore", providerChoice: "report", confidence: 0.2, status: "RESOLVED" });
+    // Below RULES.decisions.lowConfidenceThreshold (0.1): Drex's top two labels are a near coin-flip.
+    const t = await run(make(fake("drex", async () => ok("report", 0.05))), req());
+    expect(t).toMatchObject({ decisionSource: "drex_low_confidence_guardrail", chosenAction: "ignore", providerChoice: "report", confidence: 0.05, status: "RESOLVED" });
+  });
+
+  it("a clear Drex margin above the threshold is applied as Drex's own choice", async () => {
+    const t = await run(make(fake("drex", async () => ok("report", 0.22))), req());
+    expect(t).toMatchObject({ decisionSource: "drex", chosenAction: "report", providerChoice: "report", confidence: 0.22 });
   });
 
   it("caps concurrency under a burst and drains the queue", async () => {

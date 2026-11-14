@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CREDITS_NOTICE, RULES, dist } from "@vice/contracts";
 import type { CharacterView, MissionView } from "@vice/contracts";
 import "./styles.css";
-import { CityView } from "./scene";
+import { CityView, has3D } from "./scene";
 import { JoinRoom } from "./components/JoinRoom";
 import { MarketPanel } from "./components/MarketPanel";
 import { AgentInspector } from "./components/AgentInspector";
@@ -118,7 +118,7 @@ function Header() {
       {conn !== "connected" && <div className="badge warn">{conn.toUpperCase()}</div>}
       <div className="seg" role="group" aria-label="City renderer">
         <button className={viewMode === "2d" ? "on" : ""} onClick={() => useGame.setState({ viewMode: "2d" })}>2D</button>
-        <button className={viewMode === "3d" ? "on" : ""} onClick={() => useGame.setState({ viewMode: "3d" })}>3D</button>
+        <button className={viewMode === "3d" ? "on" : ""} disabled={!has3D} title={has3D ? "3D city" : "3D view is not available in this build"} onClick={() => useGame.setState({ viewMode: "3d" })}>3D</button>
       </div>
       <div className="hdr-item">{session?.nickname} · <b>{session?.role}</b>{session?.isDirector ? " · DIRECTOR" : ""}</div>
       <button className="ghost" onClick={leaveRoom}>Leave</button>
@@ -195,12 +195,15 @@ function Toasts() {
 export function App() {
   const session = useGame((s) => s.session);
   const [tab, setTab] = useState<"timeline" | "director">("timeline");
+  const [expanded, setExpanded] = useState(false);
+  const running = useGame((s) => s.experiments.some((x) => x.status === "RUNNING"));
+  useEffect(() => { if (running) { setTab("director"); setExpanded(true); } }, [running]);
   useControls();
   if (!session) return <JoinRoom />;
   return (
     <div className="app">
       <Header />
-      <main className="grid">
+      <main className={`grid ${expanded ? "xl" : tab === "director" ? "tall" : ""}`}>
         <section className="city">
           <CityHost />
           <Hud />
@@ -215,6 +218,7 @@ export function App() {
             <button role="tab" aria-selected={tab === "timeline"} className={tab === "timeline" ? "on" : ""} onClick={() => setTab("timeline")}>EVENT TIMELINE</button>
             <button role="tab" aria-selected={tab === "director"} className={tab === "director" ? "on" : ""} onClick={() => setTab("director")}>DEMO DIRECTOR · METRICS</button>
             <span className="notice">{CREDITS_NOTICE}</span>
+            <button className="ghost small" aria-pressed={expanded} title="Make this panel taller or shorter" onClick={() => setExpanded((v) => !v)}>{expanded ? "▼ smaller" : "▲ larger"}</button>
           </div>
           {tab === "timeline" ? <EventTimeline /> : <DemoDirector />}
         </section>

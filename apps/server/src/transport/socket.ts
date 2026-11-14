@@ -9,7 +9,6 @@ const RATE = { perSecond: 40, burst: 80 };
 export function attachTransport(io: Server, rooms: RoomManager): { flush(room: Room): void; experiment(r: ExperimentResult): void; wire(room: Room): void } {
   const wired = new WeakSet<Room>();
   const sessions = new Map<string, Session>(); // socket.id -> session
-  let slow = 0;
 
   function wire(room: Room): void {
     if (wired.has(room)) return;
@@ -42,7 +41,7 @@ export function attachTransport(io: Server, rooms: RoomManager): { flush(room: R
     wire(room);
     io.to(room.code).emit(SOCKET.tick, room.engine.worldTick());
     flush(room);
-    if (++slow % 10 === 0) {
+    if (room.engine.state.tick % 10 === 0) {
       io.to(room.code).emit(SOCKET.provider, room.scheduler.status());
       io.to(room.code).emit(SOCKET.metrics, room.metrics.view());
     }

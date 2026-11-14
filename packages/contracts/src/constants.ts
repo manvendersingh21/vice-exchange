@@ -52,7 +52,9 @@ export const RULES = {
   decisions: {
     deadlineMs: { drex: 3000, meta: 8000 },
     npcCooldownMs: 3500,
-    lowConfidenceThreshold: 0.34,
+    // Drex "confidence" is the margin between its top two labels (observed live). Only near coin-flips
+    // (margin under 10 points) fall back to the safe action; otherwise Drex's own choice is applied.
+    lowConfidenceThreshold: 0.1,
     maxQueue: 24,
     circuitBreakerFailures: 3,
     circuitBreakerOpenMs: 15000,
@@ -88,9 +90,10 @@ export const CITY_MAP: MapView = {
 };
 
 export const MISSION_SPOTS: ReadonlyArray<Vec2 & { label: string }> = [
-  { x: 47, z: 66, label: "Marked package at the dock" },
-  { x: 52, z: 46, label: "Drop bag in Neon Plaza" },
-  { x: 78, z: 15, label: "Stash in the loft alley" },
+  // Spots sit on open ground in BOTH worlds (browser map and the 3D city the bridge maps onto).
+  { x: 47, z: 60, label: "Marked package at the dock" },
+  { x: 52, z: 48, label: "Drop bag in Neon Plaza" },
+  { x: 78, z: 23, label: "Stash at the loft alley mouth" },
   { x: 92, z: 54, label: "Courier case on East Shore" },
   { x: 32, z: 28, label: "Envelope at the Strip corner" },
 ];

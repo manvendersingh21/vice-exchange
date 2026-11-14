@@ -11,6 +11,7 @@ import type {
   PersistencePort, PlayerState, PolicyPort, PriceChange, RoomState, SchedulerPort, WorldPort,
 } from "../domain";
 import { seedNpcs } from "../demo/seedScenario";
+import { findPath } from "./pathfinding";
 import { pad } from "./util";
 
 export interface EngineDeps {
@@ -28,6 +29,8 @@ const BULLETIN_FRESH_MS = 20000;
 const PURSUIT_LOST_MS = 5000;
 const INVESTIGATE_LINGER_MS = 4000;
 const RADIUS = 0.6;
+/** The full log lives in the store; memory keeps the recent tail for snapshots, replay checks and experiments. */
+const MAX_EVENTS_IN_MEMORY = 20000;
 
 const ack = (id: string, result?: unknown): CommandAck => ({ ok: true, id, result });
 const fail = (id: string, code: CommandErrorCode, message: string, reason?: string): CommandAck => ({ ok: false, id, error: { code, message, reason } });
@@ -53,6 +56,7 @@ export class RoomEngine implements WorldPort {
   private poseAt = new Map<string, number>();
   private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null }>();
   private storyOf = new Map<string, string>();
+  private nav = new Map<string, { goal: Vec2; path: Vec2[]; at: number }>();
 
   constructor(readonly deps: EngineDeps, readonly opts: EngineOpts) {
     this.initState(opts.seed, opts.mode, 0);
@@ -79,8 +83,9 @@ export class RoomEngine implements WorldPort {
       time: new Date().toISOString(), simTimeMs: this.now(), type, actorId,
       causationId: opts.causationId ?? null, correlationId: opts.correlationId ?? this.nextId("story"), payload,
     };
-    prepare?.(e);
+    try { prepare?.(e); } catch (err) { console.error("[engine] event prepare failed", type, err); }
     this.events.push(e as GameEvent);
+    if (this.events.length > MAX_EVENTS_IN_MEMORY) this.events.splice(0, this.events.length - MAX_EVENTS_IN_MEMORY);
     this.markDirty(e as GameEvent);
     try { this.deps.persistence.appendEvent(e as GameEvent); } catch (err) { console.error("[persistence] appendEvent failed", (err as Error).message); }
     try { this.deps.metrics.onEvent(e as GameEvent); } catch (err) { console.error("[metrics] onEvent failed", (err as Error).message); }
@@ -91,7 +96,9 @@ export class RoomEngine implements WorldPort {
     this.depth--;
     if (this.depth === 0) {
       const batch = this.outbox; this.outbox = [];
-      for (const ev of batch) for (const l of this.listeners) l(ev);
+      for (const ev of batch) for (const l of this.listeners) {
+        try { l(ev); } catch (err) { console.error("[engine] event listener failed", ev.type, err); }
+      }
     }
     return e;
   }
@@ -174,7 +181,7 @@ export class RoomEngine implements WorldPort {
     };
     this.events = [];
     this.lastTickAtMs = now; this.nextMissionAtMs = null; this.nextMissionSpot = 0;
-    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf]) m.clear();
+    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav]) m.clear();
   }
   private bootRun(first: boolean, previousRunId?: string): void {
     const s = this.state;
@@ -223,13 +230,21 @@ export class RoomEngine implements WorldPort {
     this.emit("WALLET_OPENED", "server", { walletId: player.walletId, ownerId: player.id, ownerKind: "HUMAN", balance: RULES.trade.startingWalletHuman }, { correlationId });
     this.spawnCharacter(player, correlationId);
   }
-  reconnect(playerId: string, socketId: string | null): PlayerState | null {
+  /**
+   * Binds a socket to an existing player: same token (refresh / blip) or a nickname reclaim of a disconnected player.
+   * The character, wallet and ticker are untouched. `isDirector` and `sessionToken` are replaced only when given.
+   */
+  reattach(playerId: string, socketId: string | null, change: { sessionToken?: string; isDirector?: boolean } = {}): PlayerState | null {
     const p = this.state.players[playerId];
     if (!p) return null;
-    p.connected = true; p.socketId = socketId; p.disconnectedAtMs = null;
+    p.connected = true; p.socketId = socketId; p.disconnectedAtMs = null; p.moveDir = { x: 0, z: 0 };
+    if (change.sessionToken !== undefined) p.sessionToken = change.sessionToken;
+    if (change.isDirector !== undefined) p.isDirector = change.isDirector;
     this.emit("PLAYER_JOINED", p.id, { playerId: p.id, nickname: p.nickname, role: p.role, reconnect: true });
+    this.dirty.snapshot = true;
     return p;
   }
+  reconnect(playerId: string, socketId: string | null): PlayerState | null { return this.reattach(playerId, socketId); }
   disconnect(playerId: string): void {
     const p = this.state.players[playerId];
     if (!p || !p.connected) return;
@@ -304,7 +319,8 @@ export class RoomEngine implements WorldPort {
       case "player.pose": {
         if (!this.live(c)) return fail(id, "CHARACTER_INACTIVE", "No active character");
         const now = this.now(); const w = CITY_MAP.walkable;
-        const dt = Math.max(0.05, (now - (this.poseAt.get(c.id) ?? now - 100)) / 1000);
+        // Speed check against the time since the server last accepted a position for this character (or since it spawned).
+        const dt = Math.max(0.05, (now - (this.poseAt.get(c.id) ?? c.spawnTimeMs)) / 1000);
         if (cmd.x < w.x0 || cmd.x > w.x1 || cmd.z < w.z0 || cmd.z > w.z1) return fail(id, "MOVE_REJECTED", "Outside the map");
         if (dist(c, cmd) / dt > RULES.maxPoseSpeed) return fail(id, "MOVE_REJECTED", "Too fast");
         this.poseAt.set(c.id, now); c.x = cmd.x; c.z = cmd.z; player.moveDir = { x: 0, z: 0 };
@@ -511,6 +527,7 @@ export class RoomEngine implements WorldPort {
       const c = this.character(p);
       if (!this.live(c) || (!p.moveDir.x && !p.moveDir.z)) continue;
       this.step(c, c.x + p.moveDir.x * RULES.playerSpeed * dt, c.z + p.moveDir.z * RULES.playerSpeed * dt);
+      this.poseAt.set(c.id, now);
     }
     this.deliverMessages(now);
     this.moveNpcs(now, dt);
@@ -539,14 +556,23 @@ export class RoomEngine implements WorldPort {
     if (!this.blocked(e.x, nz)) { moved = moved || nz !== e.z; e.z = nz; }
     return moved;
   }
+  /** Moves an NPC toward `to` along a building-avoiding route. Returns true on arrival. */
   private walk(n: NpcState, to: Vec2, speed: number, dt: number): boolean {
-    const d = dist(n, to);
-    if (d < 0.3) return true;
-    const k = Math.min(1, (speed * dt) / d);
-    if (!this.step(n, n.x + (to.x - n.x) * k, n.z + (to.z - n.z) * k)) {
-      // Blocked on both axes: sidestep along the longer axis to slide around a corner.
-      const side = Math.abs(to.x - n.x) > Math.abs(to.z - n.z) ? { x: n.x, z: n.z + speed * dt * Math.sign(to.z - n.z || 1) } : { x: n.x + speed * dt * Math.sign(to.x - n.x || 1), z: n.z };
-      this.step(n, side.x, side.z);
+    if (dist(n, to) < 0.3) { this.nav.delete(n.id); return true; }
+    const now = this.now();
+    let nav = this.nav.get(n.id);
+    if (!nav || !nav.path.length || dist(nav.goal, to) > 1 || now - nav.at > 700) {
+      nav = { goal: { x: to.x, z: to.z }, path: findPath(n, to, RADIUS) ?? [{ x: to.x, z: to.z }], at: now };
+      this.nav.set(n.id, nav);
+    }
+    let remaining = speed * dt;
+    while (remaining > 1e-6 && nav.path.length) {
+      const wp = nav.path[0]!; const d = dist(n, wp);
+      if (d < 0.05) { nav.path.shift(); continue; }
+      const k = Math.min(1, remaining / d);
+      if (!this.step(n, n.x + (wp.x - n.x) * k, n.z + (wp.z - n.z) * k)) { this.nav.delete(n.id); break; } // boxed in: re-route next tick
+      remaining -= d * k;
+      if (k >= 1) nav.path.shift();
     }
     return dist(n, to) < 0.3;
   }
@@ -578,7 +604,6 @@ export class RoomEngine implements WorldPort {
 
   private moveNpcs(now: number, dt: number): void {
     for (const n of Object.values(this.state.npcs)) {
-      const before = { x: n.x, z: n.z };
       if (n.activity === "PURSUE") {
         const t = n.targetCharacterId ? this.state.characters[n.targetCharacterId] : undefined;
         const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: { x: n.x, z: n.z }, arrivedAtMs: null };
@@ -601,7 +626,6 @@ export class RoomEngine implements WorldPort {
       } else if (n.activity === "PATROL" && n.patrol.length) {
         if (this.walk(n, n.patrol[n.patrolIndex % n.patrol.length]!, RULES.npcWalkSpeed, dt)) n.patrolIndex = (n.patrolIndex + 1) % n.patrol.length;
       } else if (dist(n, n.home) > 0.5) this.walk(n, n.home, RULES.npcWalkSpeed, dt);
-      if (before.x !== n.x || before.z !== n.z) continue;
     }
   }
 

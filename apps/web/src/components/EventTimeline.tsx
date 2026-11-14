@@ -35,6 +35,8 @@ export function EventTimeline() {
   const chain = useMemo(() => (selectedEventId ? chainOf(events, selectedEventId) : null), [events, selectedEventId]);
   const story = useMemo(() => (selectedEventId ? events.find((e) => e.eventId === selectedEventId)?.correlationId ?? null : null), [events, selectedEventId]);
   const shown = useMemo(() => events.filter((e) => !off.has(CATEGORY[e.type] ?? "system") && (detail || !NOISY.has(e.type)) && (detail || e.type !== "MARKET_PRICE_UPDATED" || (e as GameEvent<"MARKET_PRICE_UPDATED">).payload.reason !== "SURVIVAL_TICK")).slice(-220), [events, off, detail]);
+  const runId = useGame((s) => s.runId);
+  useEffect(() => { if (!selectedEventId) setFollow(true); }, [selectedEventId, runId]);
   useEffect(() => { if (follow && !selectedEventId && box.current) box.current.scrollTop = box.current.scrollHeight; }, [shown, follow, selectedEventId]);
   const toggle = (c: EventCategory) => setOff((prev) => { const n = new Set(prev); if (n.has(c)) n.delete(c); else n.add(c); return n; });
   return (
@@ -46,7 +48,7 @@ export function EventTimeline() {
         {selectedEventId && <button className="ghost small" onClick={() => selectEvent(null)}>Clear chain ({chain?.size ?? 0} linked)</button>}
         <span className="dim small">Click an event to trace its cause and effects.</span>
       </div>
-      <div className="tl-list" ref={box} onScroll={(e) => { const el = e.currentTarget; setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}>
+      <div className="tl-list" ref={box} onScroll={(e) => { if (selectedEventId) return; const el = e.currentTarget; setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}>
         {shown.length === 0 && <div className="dim pad">Waiting for the city to do something…</div>}
         {shown.map((e) => {
           const inChain = chain?.has(e.eventId);

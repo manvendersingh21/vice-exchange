@@ -24,7 +24,7 @@ characters, maps, logos or look.
 
 ## Game rules (authoritative numbers are in RULES)
 - Mission: outlaw within 2.5 m interacts -> MISSION_COMPLETED then INCIDENT_OCCURRED; notoriety +2, missions +1, heat +12.
-  A new mission spawns at the next MISSION_SPOTS entry after 20 s.
+  A new mission spawns at the next MISSION_SPOTS entry after 20 s (spots: (47,60), (52,48), (78,23), (92,54), (32,28)).
 - Perception: NPCs within 14 m with line of sight (CITY_MAP buildings block) get a DIRECT memory + NPC_OBSERVED.
 - Witness chooses report | gossip | ignore. report -> message to nearest police. gossip -> message to its informant contact.
 - Informant chooses relay | withhold. relay -> messages to its trader contacts.

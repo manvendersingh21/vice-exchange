@@ -100,7 +100,7 @@ export function MarketPanel() {
     (a.status === b.status ? b.openedAtMs - a.openedAtMs : a.status === "ACTIVE" ? -1 : 1)), [listings]);
   return (
     <section className="panel market" aria-label="Market">
-      <h2>MARKET <span className="h2-sub">fictional V$ only · house counterparty · 1 share per order</span></h2>
+      <h2>MARKET <span className="h2-sub" title="The server is the simulated house counterparty. Max 10 shares per ticker, one order every 2 s.">fictional V$ · 1 share per order</span></h2>
       {wallet ? (
         <div className="wallet">
           <div><span className="k">Wallet</span><b>{vd(wallet.balanceCredits)}</b></div>

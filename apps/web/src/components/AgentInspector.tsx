@@ -82,14 +82,17 @@ function AgentDetail({ a }: { a: AgentView }) {
         <span className="icon" aria-hidden>{ROLE_ICON[a.role]}</span>
         <div><div className="agent-name">{a.name}</div><div className="dim">{a.role} · {a.activity}{a.pendingDecisionId ? " · deciding…" : ""}</div></div>
       </div>
-      <div className="agent-line"><span className="k">Persona</span>{a.persona}</div>
-      <div className="agent-line"><span className="k">Goal</span>{a.goal}</div>
-      {a.walletCredits != null && <div className="agent-line"><span className="k">Wallet</span>{vd(a.walletCredits)}{holdings.length ? ` · holds ${holdings.map(([t, n]) => `${t}×${n}`).join(", ")}` : " · no holdings"}</div>}
-      {a.contacts.length > 0 && <div className="agent-line"><span className="k">Contacts</span>{a.contacts.map((c) => nameOf(state(), c)).join(", ")}</div>}
+      <div className="agent-bio"><span className="k">Persona</span>{a.persona} <span className="k gap">Goal</span>{a.goal}</div>
+      {(a.walletCredits != null || a.contacts.length > 0) && (
+        <div className="agent-bio">
+          {a.walletCredits != null && <><span className="k">Wallet</span>{vd(a.walletCredits)}{holdings.length ? ` · holds ${holdings.map(([t, n]) => `${t}×${n}`).join(", ")}` : " · no holdings"} </>}
+          {a.contacts.length > 0 && <><span className="k gap">Tells</span>{a.contacts.map((c) => nameOf(state(), c)).join(", ")}</>}
+        </div>
+      )}
+      <h3>LAST DECISION <span className="h2-sub">what it was offered, what it chose, and who actually decided</span></h3>
+      {a.lastDecision ? <Decision t={a.lastDecision} full /> : <div className="dim">No decision yet.</div>}
       <h3>KNOWS ({a.memories.length}) <span className="h2-sub">private memory — nobody else has this unless told</span></h3>
       <ul className="mems">{a.memories.length === 0 ? <li className="dim">Knows nothing yet.</li> : a.memories.slice(0, 8).map((m) => <Mem key={m.id} m={m} />)}</ul>
-      <h3>LAST DECISION</h3>
-      {a.lastDecision ? <Decision t={a.lastDecision} full /> : <div className="dim">No decision yet.</div>}
       <h3>MESSAGES</h3>
       <ul className="feed">{msgs.length === 0 ? <li className="dim">No messages sent or received.</li> : msgs.map((e) => (
         <li key={e.eventId}>{e.payload.senderId === a.id ? "→ to" : "← from"} <b>{nameOf(state(), e.payload.senderId === a.id ? e.payload.recipientId : e.payload.senderId)}</b> [{e.payload.kind}, hop {e.payload.hop}] {e.payload.summary}</li>))}</ul>
