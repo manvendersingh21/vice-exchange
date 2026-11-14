@@ -99,7 +99,9 @@ export function createMetrics(): MetricsPort {
         bySource[d.source] = (bySource[d.source] ?? 0) + 1;
         byRole[d.role] = (byRole[d.role] ?? 0) + 1;
         if (d.action) byAction[d.action] = (byAction[d.action] ?? 0) + 1;
-        if (d.status === "REJECTED") { rejected++; if (d.rejectReason && /stale/i.test(d.rejectReason)) stale++; }
+        // Stale = the world moved on while the provider was thinking (captured, halted, reset, sighting lost...).
+        // The brains never use the word "stale"; the only rejection that is not stale is an unoffered label.
+        if (d.status === "REJECTED") { rejected++; if (d.rejectReason && !/was not offered/i.test(d.rejectReason)) stale++; }
         if (d.provider && typeof d.latencyMs === "number") {
           lat[d.provider].push(d.latencyMs);
           if (typeof d.evalMs === "number") evals[d.provider].push(d.evalMs);
