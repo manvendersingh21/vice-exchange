@@ -41,6 +41,9 @@ export interface EventPayloads {
     bounty: number; captorBalanceAfter: number | null;
     referenceAtCapture: number; spotBeforeCapture: number; survivalSeconds: number;
   };
+  /** A stun pulse was fired. Nobody is hurt: a hit only stuns. hitId is null on a miss. */
+  WEAPON_FIRED: { shooterId: EntityId; shooterName: string; shooterKind: ActorKind; x: number; z: number; toX: number; toZ: number; hitId: EntityId | null; hitKind: "CHARACTER" | "NPC" | null; ammoLeft: number };
+  STUNNED: { targetId: EntityId; targetName: string; targetKind: "CHARACTER" | "NPC"; untilMs: number; byId: EntityId };
   CAPTURE_REJECTED: { commandId: string; captorId: EntityId; targetCharacterId: EntityId; reason: CaptureRejectReason };
   LISTING_HALTED: { ticker: string; characterId: EntityId; status: "HALTED_CAPTURED"; finalSpotBeforeHalt: number };
   CHARACTER_ARCHIVED: { characterId: EntityId; ticker: string | null; playerId: EntityId };
@@ -54,7 +57,7 @@ export const EVENT_TYPES = [
   "LISTING_OPENED", "MISSION_SPAWNED", "MISSION_COMPLETED", "INCIDENT_OCCURRED", "NPC_OBSERVED",
   "AGENT_MESSAGE_SENT", "AGENT_MESSAGE_DELIVERED", "BULLETIN_PUBLISHED", "DECISION_REQUESTED", "DECISION_RESOLVED",
   "AGENT_ACTION_APPLIED", "AGENT_ACTION_REJECTED", "MARKET_PRICE_UPDATED", "TRADE_EXECUTED", "TRADE_REJECTED",
-  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "LISTING_HALTED",
+  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "WEAPON_FIRED", "STUNNED", "LISTING_HALTED",
   "CHARACTER_ARCHIVED", "CHARACTER_RESPAWNED", "POLICY_INGESTED",
 ] as const satisfies readonly EventType[];
 

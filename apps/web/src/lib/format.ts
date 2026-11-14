@@ -1,5 +1,7 @@
 import type { DecisionSource, DecisionTrace, EventType, GameEvent } from "@vice/contracts";
+import { RULES } from "@vice/contracts";
 import type { GameState } from "../state/gameStore";
+const RULES_STUN_MS = RULES.weapon.stunMs;
 import { nameOf } from "../state/gameStore";
 
 export const vd = (n: number | null | undefined): string => (n == null ? "—" : `V$${Math.round(n).toLocaleString("en-US")}`);
@@ -16,7 +18,7 @@ export const CATEGORY: Record<EventType, EventCategory> = {
   AGENT_ACTION_APPLIED: "agent", AGENT_ACTION_REJECTED: "agent", MARKET_PRICE_UPDATED: "market", TRADE_EXECUTED: "market",
   TRADE_REJECTED: "market", WANTED_STATUS_CHANGED: "capture", ESCAPE_SUCCEEDED: "capture", CAPTURE_SUCCEEDED: "capture",
   CAPTURE_REJECTED: "capture", LISTING_HALTED: "capture", CHARACTER_ARCHIVED: "capture", CHARACTER_RESPAWNED: "world",
-  POLICY_INGESTED: "system",
+  POLICY_INGESTED: "system", WEAPON_FIRED: "capture", STUNNED: "capture",
 };
 
 /** Honest source labels: only "drex" is ever shown as Drex. */
@@ -74,6 +76,8 @@ export function describeEvent(e: GameEvent, s: GameState): string {
     case "LISTING_HALTED": return `${p.ticker} HALTED — ${vd(p.finalSpotBeforeHalt)} → V$0`;
     case "CHARACTER_ARCHIVED": return `${p.ticker ?? n(p.characterId)} archived (history kept)`;
     case "CHARACTER_RESPAWNED": return `${n(p.playerId)} respawned with new ticker ${p.ticker ?? "—"}`;
+    case "WEAPON_FIRED": return `${p.shooterName} fired a stun pulse${p.hitId ? ` and hit ${n(p.hitId)}` : " and missed"} (${p.ammoLeft} left)`;
+    case "STUNNED": return `${p.targetName} is stunned for ${(Number(RULES_STUN_MS) / 1000).toFixed(0)} s (no damage)`;
     case "POLICY_INGESTED": return `Policy document ingested: ${p.documentTitle} (${p.factCount} facts)`;
     default: return e.type;
   }

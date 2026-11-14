@@ -62,6 +62,10 @@ export class RoomEngine implements WorldPort {
   private bulletinAt = new Map<string, number>();
   private captureAttemptAt = new Map<string, number>();
   private poseAt = new Map<string, number>();
+  /** Stun pulse bookkeeping: per character ammo and next-shot time; per entity (character or NPC) stun end. */
+  private ammo = new Map<string, number>();
+  private weaponReadyAt = new Map<string, number>();
+  private stunnedUntil = new Map<string, number>();
   private poseBudget = new Map<string, { metres: number; at: number }>();
   /** Per-officer chase/search record. `departAtMs` is when an investigation actually sets off (dispatch delay); `pace` is its walking speed. */
   private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null; departAtMs: number; pace: number }>();
@@ -395,9 +399,10 @@ export class RoomEngine implements WorldPort {
           this.emit("CAPTURE_REJECTED", player.id, { commandId: cmd.commandId, captorId: player.id, targetCharacterId: cmd.targetCharacterId, reason: "NOT_ALLOWED_FOR_ROLE" });
           return fail(id, "NOT_ALLOWED_FOR_ROLE", "Only hunters can capture", "NOT_ALLOWED_FOR_ROLE");
         }
-        const r = this.attemptCapture({ captorId: player.id, captorName: player.nickname, captorKind: "HUMAN", pos: c, active: this.live(c), walletId: player.walletId, selfCharacterId: c.id, commandId: cmd.commandId, targetId: cmd.targetCharacterId });
+        const r = this.attemptCapture({ captorId: player.id, captorName: player.nickname, captorKind: "HUMAN", pos: c, active: this.live(c) && !this.isStunned(c.id, this.now()), walletId: player.walletId, selfCharacterId: c.id, commandId: cmd.commandId, targetId: cmd.targetCharacterId });
         return r.ok ? ack(id, { bounty: r.bounty }) : fail(id, "CAPTURE_REJECTED", `Capture rejected: ${r.reason}`, r.reason);
       }
+      case "weapon.fire": return this.fireWeapon(player, c, cmd, id);
       case "character.respawn": {
         if (!c || c.status !== "CAPTURED") return fail(id, "NOT_CAPTURED", "Character is not captured");
         const corr = this.nextId("story");
@@ -442,6 +447,7 @@ export class RoomEngine implements WorldPort {
     const players = Object.values(prev.players).filter((p) => p.connected || p.isBot).sort((a, b) => a.joinedAtMs - b.joinedAtMs || a.id.localeCompare(b.id));
     this.deps.scheduler.cancelAll();
     this.idem.clear(); this.playerRemap.clear();
+    this.ammo.clear(); this.weaponReadyAt.clear(); this.stunnedUntil.clear();
     this.brains.reset();
     this.deps.memory.clear();
     this.initState(seed ?? prev.seed, prev.mode, prev.lastEventSequence);
@@ -587,6 +593,68 @@ export class RoomEngine implements WorldPort {
     return { ok: true, bounty };
   }
 
+  // ---------- stun pulse ----------
+  private isStunned(id: string, now: number): boolean { return (this.stunnedUntil.get(id) ?? 0) > now; }
+
+  /**
+   * One non-lethal weapon. Every check runs on the server: role, live character, not stunned, cooldown, ammo, range and
+   * line of sight (buildings block, cars do not). A hit stuns a human character or a police NPC; nothing else can be hit.
+   */
+  private fireWeapon(player: PlayerState, c: CharacterState | null, cmd: { targetId?: string; dirX?: number; dirZ?: number; commandId: string }, id: string): CommandAck {
+    const W = RULES.weapon; const now = this.now(); const s = this.state;
+    const no = (message: string, reason: string) => fail(id, "WEAPON_REJECTED", message, reason);
+    if (player.role === "SPECTATOR" || !c) return fail(id, "NOT_ALLOWED_FOR_ROLE", "Spectators cannot fire");
+    if (!this.live(c)) return fail(id, "CHARACTER_INACTIVE", "No active character");
+    if (this.isStunned(c.id, now)) return no("You are stunned", "STUNNED");
+    if (now < (this.weaponReadyAt.get(c.id) ?? 0)) return no("Pulse is recharging", "COOLDOWN");
+    const ammo = this.ammo.get(c.id) ?? W.ammo;
+    if (ammo <= 0) return no("Out of charges", "NO_AMMO");
+
+    type Target = { id: string; name: string; kind: "CHARACTER" | "NPC"; x: number; z: number };
+    const candidates: Target[] = [
+      ...Object.values(s.characters).filter((t) => t.id !== c.id && this.live(t)).map((t) => ({ id: t.id, name: t.nickname, kind: "CHARACTER" as const, x: t.x, z: t.z })),
+      ...Object.values(s.npcs).filter((n) => n.role === "POLICE").map((n) => ({ id: n.id, name: n.name, kind: "NPC" as const, x: n.x, z: n.z })),
+    ];
+    const reachable = (t: Target) => dist(c, t) <= W.rangeM && hasLineOfSight(c, t);
+    let hit: Target | null = null; let to: Vec2;
+    if (cmd.targetId !== undefined) {
+      const t = candidates.find((k) => k.id === cmd.targetId);
+      if (!t) return no("That target cannot be hit", "INVALID_TARGET");
+      if (dist(c, t) > W.rangeM) return no("Out of range", "OUT_OF_RANGE");
+      if (!hasLineOfSight(c, t)) return no("No line of sight", "LINE_OF_SIGHT_BLOCKED");
+      hit = t; to = { x: t.x, z: t.z };
+    } else {
+      const m = Math.hypot(cmd.dirX ?? 0, cmd.dirZ ?? 0);
+      if (!m) return no("Aim at a target or give a direction", "NO_AIM");
+      const dx = (cmd.dirX ?? 0) / m, dz = (cmd.dirZ ?? 0) / m; const cos = Math.cos((W.coneDeg * Math.PI) / 180);
+      for (const t of candidates) {
+        const d = dist(c, t); if (d < 0.01 || !reachable(t)) continue;
+        if (((t.x - c.x) * dx + (t.z - c.z) * dz) / d < cos) continue;
+        if (!hit || d < dist(c, hit)) hit = t;
+      }
+      to = hit ? { x: hit.x, z: hit.z } : { x: c.x + dx * W.rangeM, z: c.z + dz * W.rangeM };
+    }
+
+    this.ammo.set(c.id, ammo - 1); this.weaponReadyAt.set(c.id, now + W.cooldownMs);
+    this.dirty.characters.add(c.id);
+    const correlationId = this.storyOf.get(c.id) ?? this.nextId("story");
+    const shot = this.emit("WEAPON_FIRED", c.id, { shooterId: c.id, shooterName: c.nickname, shooterKind: "HUMAN", x: c.x, z: c.z, toX: to.x, toZ: to.z, hitId: hit?.id ?? null, hitKind: hit?.kind ?? null, ammoLeft: ammo - 1 }, { correlationId });
+    const opts = { causationId: shot.eventId, correlationId };
+    if (hit) {
+      const untilMs = now + W.stunMs;
+      this.stunnedUntil.set(hit.id, untilMs);
+      if (hit.kind === "CHARACTER") { const owner = s.players[s.characters[hit.id]!.playerId]; if (owner) owner.moveDir = { x: 0, z: 0 }; this.dirty.characters.add(hit.id); }
+      else { const n = s.npcs[hit.id]!; n.lastCaptureAttemptAtMs = Math.max(n.lastCaptureAttemptAtMs, untilMs - RULES.captureCooldownMs); this.dirty.agents.add(hit.id); }
+      this.emit("STUNNED", hit.id, { targetId: hit.id, targetName: hit.name, targetKind: hit.kind, untilMs, byId: c.id }, opts);
+    }
+    // An outlaw firing in the street is something the city can see: heat, and an incident nearby NPCs may witness.
+    if (c.role === "OUTLAW") {
+      this.addHeat(c, W.heatPerShot, "fired a stun pulse", opts);
+      this.incident("SIGHTING", c, `${c.nickname} fired a stun pulse${hit ? ` at ${hit.name}` : ""}.`, opts);
+    }
+    return ack(id, { hitId: hit?.id ?? null, ammoLeft: ammo - 1, readyAtMs: now + W.cooldownMs });
+  }
+
   // ---------- tick ----------
   tick(): void {
     const s = this.state; const now = this.now();
@@ -596,6 +664,7 @@ export class RoomEngine implements WorldPort {
     for (const p of Object.values(s.players)) {
       const c = this.character(p);
       if (!this.live(c) || (!p.moveDir.x && !p.moveDir.z)) continue;
+      if (this.isStunned(c.id, now)) continue;
       this.step(c, c.x + p.moveDir.x * RULES.playerSpeed * dt, c.z + p.moveDir.z * RULES.playerSpeed * dt);
       this.poseAt.set(c.id, now);
     }
@@ -689,6 +758,7 @@ export class RoomEngine implements WorldPort {
 
   private moveNpcs(now: number, dt: number): void {
     for (const n of Object.values(this.state.npcs)) {
+      if (this.isStunned(n.id, now)) { const p = this.pursuit.get(n.id); if (p) p.lastSeenAtMs = now; continue; } // frozen; the chase resumes afterwards
       if (n.activity === "PURSUE") {
         const t = n.targetCharacterId ? this.state.characters[n.targetCharacterId] : undefined;
         const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: { x: n.x, z: n.z }, arrivedAtMs: null, departAtMs: now, pace: RULES.policePursuitSpeed };
@@ -810,7 +880,7 @@ export class RoomEngine implements WorldPort {
 
   // ---------- views ----------
   characterView(c: CharacterState): CharacterView {
-    return { id: c.id, playerId: c.playerId, nickname: c.nickname, role: c.role, ticker: c.ticker, status: c.status, x: c.x, z: c.z, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), wanted: c.status === "WANTED", notorietyPoints: c.notorietyPoints, completedMissions: c.completedMissions, successfulEscapes: c.successfulEscapes, spawnTimeMs: c.spawnTimeMs, captureTimeMs: c.captureTimeMs, capturedBy: c.capturedBy };
+    return { id: c.id, stunnedUntilMs: this.stunnedUntil.get(c.id) ?? null, ammo: this.ammo.get(c.id) ?? RULES.weapon.ammo, weaponReadyAtMs: this.weaponReadyAt.get(c.id) ?? 0, playerId: c.playerId, nickname: c.nickname, role: c.role, ticker: c.ticker, status: c.status, x: c.x, z: c.z, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), wanted: c.status === "WANTED", notorietyPoints: c.notorietyPoints, completedMissions: c.completedMissions, successfulEscapes: c.successfulEscapes, spawnTimeMs: c.spawnTimeMs, captureTimeMs: c.captureTimeMs, capturedBy: c.capturedBy };
   }
   missionView(id: string): MissionView { const m = this.state.missions[id]!; return { id: m.id, x: m.x, z: m.z, label: m.label, status: m.status, completedByCharacterId: m.completedByCharacterId }; }
   agentView(id: string): AgentView {
@@ -826,7 +896,7 @@ export class RoomEngine implements WorldPort {
     return {
       tick: s.tick, serverTimeMs: this.now(),
       characters: Object.values(s.characters).filter((c) => c.status !== "ARCHIVED").map((c) => ({ id: c.id, x: Math.round(c.x * 100) / 100, z: Math.round(c.z * 100) / 100, heat: Math.round(c.heat), status: c.status })),
-      npcs: Object.values(s.npcs).map((n) => ({ id: n.id, x: Math.round(n.x * 100) / 100, z: Math.round(n.z * 100) / 100, activity: n.activity, pending: this.brains.view(n.id).pendingDecisionId !== null })),
+      npcs: Object.values(s.npcs).map((n) => ({ id: n.id, x: Math.round(n.x * 100) / 100, z: Math.round(n.z * 100) / 100, activity: n.activity, pending: this.brains.view(n.id).pendingDecisionId !== null, ...(this.isStunned(n.id, this.now()) ? { stunned: true } : {}) })),
     };
   }
   snapshot(): RoomSnapshot {

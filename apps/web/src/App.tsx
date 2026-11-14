@@ -75,6 +75,32 @@ function useControls(): void {
       if (!ack.ok) st.toast(`Job failed: ${ack.error?.message ?? "rejected"}`, "bad");
       else st.toast("Job done. Notoriety up — and someone may have seen you.", "good");
     };
+    // Stun pulse (F): no damage. Aims at the nearest legal target in range (in 3D: in front of the camera), else fires along the view.
+    const fire = async () => {
+      const st = useGame.getState();
+      const me = selectMyCharacter(st);
+      if (!me || !st.session || st.session.role === "SPECTATOR") return;
+      if (!isLive(me)) { st.toast("You are captured. Press R to respawn with a new ticker.", "bad"); return; }
+      const here = getPose(me.id) ?? me;
+      const threeD = st.viewMode === "3d" && cameraYaw.active;
+      const fwd = threeD ? cameraRelative(0, -1, cameraYaw.value) : null;
+      const targets = [
+        ...Object.values(st.characters).filter((c) => c.id !== me.id && isLive(c)).map((c) => ({ id: c.id, p: getPose(c.id) ?? c })),
+        ...Object.values(st.npcs).filter((n) => n.role === "POLICE").map((n) => ({ id: n.id, p: getPose(n.id) ?? n })),
+      ];
+      let best: { id: string; d: number } | null = null;
+      for (const t of targets) {
+        const dx = t.p.x - here.x, dz = t.p.z - here.z, d = Math.hypot(dx, dz);
+        if (d > RULES.weapon.rangeM || d < 0.01) continue;
+        if (fwd && (dx * fwd.x + dz * fwd.z) / d < 0.5) continue; // behind or far off to the side of the camera
+        if (!best || d < best.d) best = { id: t.id, d };
+      }
+      const aim = best ? { targetId: best.id } : fwd ? { dirX: fwd.x, dirZ: fwd.z } : null;
+      if (!aim) { st.toast(`No target within ${RULES.weapon.rangeM} m.`, "info"); return; }
+      const ack = await send({ type: "weapon.fire", ...aim, commandId: newId() });
+      if (!ack.ok) st.toast(`Pulse: ${(ack.error?.message ?? "rejected").toLowerCase()}`, "bad");
+      else if (!(ack.result as { hitId?: string | null } | undefined)?.hitId) st.toast("Pulse fired: missed.", "info");
+    };
     const respawn = async () => {
       const st = useGame.getState();
       const me = selectMyCharacter(st);
@@ -92,6 +118,7 @@ function useControls(): void {
         e.preventDefault(); down.add(k); pushMove();
       } else if (k === "e" && !e.repeat) { void act(); }
       else if (k === "r" && !e.repeat) { void respawn(); }
+      else if (k === "f" && !e.repeat && useGame.getState().viewMode !== "world") { void fire(); }
     };
     const onUp = (e: KeyboardEvent) => { down.delete(e.key.toLowerCase()); pushMove(); };
     const onBlur = () => { down.clear(); pushMove(); };
@@ -165,6 +192,7 @@ function CityHost() {
 function Hud() {
   const me = useMyCharacter();
   const listing = useGame((s) => (me?.ticker ? s.listings[me.ticker] ?? null : null));
+  const serverNow = useGame((s) => s.serverTimeMs);
   const session = useGame((s) => s.session);
   if (!session) return null;
   if (session.role === "SPECTATOR") return <div className="hud"><span className="hud-chip">SPECTATOR — click any NPC to inspect what it knows</span></div>;
@@ -178,7 +206,8 @@ function Hud() {
       </span>
       {me.role === "OUTLAW" && <span className="hud-chip">jobs {me.completedMissions} · notoriety {me.notorietyPoints} · escapes {me.successfulEscapes}</span>}
       {listing && live && <span className="hud-chip">bounty on you {vd(listing.currentBounty)}</span>}
-      <span className="hud-chip dim">{live ? (me.role === "HUNTER" ? "WASD move · E capture a WANTED target within 2.5 m" : "WASD move · E do the job at the marker") : "CAPTURED — press R to respawn"}</span>
+      {live && <span className={`hud-chip ${(me.stunnedUntilMs ?? 0) > serverNow ? "bad" : ""}`} title="Stun pulse: no damage. A hit freezes a player or a police officer for 3 s.">{(me.stunnedUntilMs ?? 0) > serverNow ? "STUNNED" : `F pulse ${me.ammo ?? RULES.weapon.ammo}/${RULES.weapon.ammo}`}</span>}
+      <span className="hud-chip dim">{live ? (me.role === "HUNTER" ? "WASD move · E capture a WANTED target within 2.5 m · F stun pulse" : "WASD move · E do the job at the marker · F stun pulse") : "CAPTURED — press R to respawn"}</span>
     </div>
   );
 }

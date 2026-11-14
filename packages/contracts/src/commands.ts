@@ -28,6 +28,8 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("market.buy"), ticker: tickerSchema, qty: z.literal(1), commandId }),
   z.object({ type: z.literal("market.sell"), ticker: tickerSchema, qty: z.literal(1), commandId }),
   z.object({ type: z.literal("capture.attempt"), targetCharacterId: shortId, commandId }),
+  /** Stun pulse: aim at a target id, or along a direction (the server picks the nearest legal target in a narrow cone). */
+  z.object({ type: z.literal("weapon.fire"), targetId: shortId.optional(), dirX: z.number().min(-1).max(1).optional(), dirZ: z.number().min(-1).max(1).optional(), commandId }),
   z.object({ type: z.literal("character.respawn"), commandId }),
   z.object({ type: z.literal("demo.reset"), commandId, seed: z.number().int().min(0).max(2147483647).optional() }),
   z.object({ type: z.literal("demo.incident"), incidentType: z.literal("SIGHTING"), commandId, targetCharacterId: shortId.optional() }),
@@ -40,7 +42,7 @@ export type ClientCommandType = ClientCommand["type"];
 export type CommandErrorCode =
   | "INVALID_COMMAND" | "NOT_JOINED" | "ROOM_NOT_FOUND" | "ROOM_FULL" | "FORBIDDEN" | "RATE_LIMITED"
   | "NOT_ALLOWED_FOR_ROLE" | "MISSION_UNAVAILABLE" | "OUT_OF_RANGE" | "CHARACTER_INACTIVE"
-  | "TRADE_REJECTED" | "CAPTURE_REJECTED" | "NOT_CAPTURED" | "MOVE_REJECTED" | "INTERNAL";
+  | "TRADE_REJECTED" | "CAPTURE_REJECTED" | "NOT_CAPTURED" | "MOVE_REJECTED" | "WEAPON_REJECTED" | "INTERNAL";
 
 export interface CommandAck<R = unknown> {
   ok: boolean;

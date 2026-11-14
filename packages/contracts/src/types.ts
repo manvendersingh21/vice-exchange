@@ -131,6 +131,8 @@ export interface CharacterView {
   heat: number; wantedLevel: number; wanted: boolean;
   notorietyPoints: number; completedMissions: number; successfulEscapes: number;
   spawnTimeMs: number; captureTimeMs: number | null; capturedBy: EntityId | null;
+  /** Stun pulse state (optional so older clients ignore it). */
+  stunnedUntilMs?: number | null; ammo?: number; weaponReadyAtMs?: number;
 }
 
 export interface PricePoint { t: number; spot: number; reference: number }
@@ -197,7 +199,7 @@ export interface PolicyKnowledgeView { documentTitle: string; sourceUrl: string 
 export interface WorldTick {
   tick: number; serverTimeMs: number;
   characters: Array<{ id: EntityId; x: number; z: number; heat: number; status: CharacterStatus }>;
-  npcs: Array<{ id: EntityId; x: number; z: number; activity: NpcActivity; pending: boolean }>;
+  npcs: Array<{ id: EntityId; x: number; z: number; activity: NpcActivity; pending: boolean; stunned?: boolean }>;
 }
 
 export interface RoomSnapshot {

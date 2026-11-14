@@ -11,6 +11,7 @@ type Fx =
   | { t: "pulse"; from: string; to: string; kind: MessageKind; start: number; dur: number; done?: boolean }
   | { t: "ring"; x: number; z: number; color: string; start: number; dur: number; max: number }
   | { t: "label"; x: number; z: number; text: string; color: string; start: number; dur: number; big?: boolean }
+  | { t: "beam"; x: number; z: number; tx: number; tz: number; color: string; start: number; dur: number }
   | { t: "flash"; start: number; dur: number };
 
 const ROLE_COLOR: Record<NpcRole, string> = { WITNESS: "#ffd166", INFORMANT: "#c77dff", TRADER: "#5dfdcb", POLICE: "#4cc9f0" };
@@ -101,6 +102,14 @@ export function CanvasCity(props: CityViewProps) {
             fx.push({ t: "flash", start: now, dur: 700 });
             fx.push({ t: "ring", x: o.x, z: o.z, color: "#ff4d6d", start: now, dur: 1400, max: 30 });
             fx.push({ t: "label", x: o.x, z: o.z, text: `${p.ticker ?? "CAPTURED"}  V$${p.spotBeforeCapture} → V$0`, color: "#ff4d6d", start: now, dur: 3500, big: true });
+            break;
+          }
+          case "WEAPON_FIRED":
+            fx.push({ t: "beam", x: p.x, z: p.z, tx: p.toX, tz: p.toZ, color: "#b8f7ff", start: now, dur: 320 });
+            break;
+          case "STUNNED": {
+            const o = at(p.targetId);
+            if (o) { fx.push({ t: "ring", x: o.x, z: o.z, color: "#b8f7ff", start: now, dur: 900, max: 5 }); fx.push({ t: "label", x: o.x, z: o.z, text: "STUNNED", color: "#b8f7ff", start: now, dur: RULES.weapon.stunMs }); }
             break;
           }
           case "ESCAPE_SUCCEEDED": {
@@ -305,6 +314,9 @@ export function CanvasCity(props: CityViewProps) {
           ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fill();
           ctx.restore();
           text(f.kind, (ax + bx) / 2, (ay + by) / 2 - 9, col, "700 10px ui-sans-serif, system-ui, sans-serif");
+        } else if (f.t === "beam") {
+          ctx.save(); ctx.globalAlpha = 1 - t; ctx.strokeStyle = f.color; ctx.lineWidth = 3; ctx.shadowColor = f.color; ctx.shadowBlur = 14; ctx.lineCap = "round";
+          ctx.beginPath(); ctx.moveTo(sx(f.x), sz(f.z)); ctx.lineTo(sx(f.tx), sz(f.tz)); ctx.stroke(); ctx.restore();
         } else if (f.t === "ring") {
           ctx.save(); ctx.globalAlpha = 1 - t; ctx.strokeStyle = f.color; ctx.lineWidth = 2.5; ctx.shadowColor = f.color; ctx.shadowBlur = 12;
           ctx.beginPath(); ctx.arc(sx(f.x), sz(f.z), f.max * m * (reduced ? 1 : t), 0, Math.PI * 2); ctx.stroke(); ctx.restore();

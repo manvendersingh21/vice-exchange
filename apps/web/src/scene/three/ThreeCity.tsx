@@ -314,6 +314,8 @@ export default function ThreeCity(props: CityViewProps) {
       if (e.serverSequence <= since) continue;
       if (e.type === "AGENT_MESSAGE_SENT") { const p = e.payload as { messageId: string; senderId: string; recipientId: string; kind: MessageKind }; arc(p.messageId, p.senderId, p.recipientId, p.kind); }
       else if (e.type === "BULLETIN_PUBLISHED") { const p = e.payload as { bulletinId: string; issuedBy: string; recipientIds: string[] }; p.recipientIds.forEach((r) => arc(`${p.bulletinId}:${r}`, p.issuedBy, r, "BULLETIN")); }
+      else if (e.type === "WEAPON_FIRED") { const p = e.payload as { x: number; z: number; toX: number; toZ: number }; newArcs.push({ id: e.eventId, from: { x: p.x, z: p.z }, to: { x: p.toX, z: p.toZ }, kind: "REPORT", startedAtMs: now, durationMs: 260 }); }
+      else if (e.type === "STUNNED") { const p = e.payload as { targetId: string }; const where = at(p.targetId); if (where) newBursts.push({ id: e.eventId, x: where.x, z: where.z, startedAtMs: now }); }
       else if (e.type === "CAPTURE_SUCCEEDED") { const p = e.payload as { captureId: string; characterId: string }; const where = at(p.characterId); if (where) newBursts.push({ id: p.captureId, x: where.x, z: where.z, startedAtMs: now }); }
     }
     if (newArcs.length) setArcs((a) => [...a.filter((x) => now - x.startedAtMs < ARC_MS + ARC_LINGER_MS), ...newArcs]);
