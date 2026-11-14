@@ -135,14 +135,15 @@ export function CanvasCity(props: CityViewProps) {
       const map = P.map;
 
       // --- targets (tick overrides view positions) ---
-      for (const c of P.characters) target(c.id, c.x, c.z, now);
-      for (const n of P.npcs) target(n.id, n.x, n.z, now);
       const tickChar = new Map<string, { heat: number; status: string }>();
       const tickNpc = new Map<string, { activity: string; pending: boolean }>();
       if (P.tick) {
         for (const c of P.tick.characters) { target(c.id, c.x, c.z, now); tickChar.set(c.id, c); }
         for (const n of P.tick.npcs) { target(n.id, n.x, n.z, now); tickNpc.set(n.id, n); }
       }
+      // View positions go stale between snapshots: use them only for entities the latest tick does not carry.
+      for (const c of P.characters) if (!tickChar.has(c.id)) target(c.id, c.x, c.z, now);
+      for (const n of P.npcs) if (!tickNpc.has(n.id)) target(n.id, n.x, n.z, now);
       const k = reduced ? 1 : 1 - Math.exp(-dt * 14);
       for (const [id, s] of pos) {
         s.x += (s.tx - s.x) * k; s.z += (s.tz - s.z) * k;

@@ -14,6 +14,8 @@ export interface GameState {
   conn: "idle" | "connecting" | "connected" | "disconnected";
   session: Session | null;
   roomCode: string; runId: string; seed: number; ruleVersion: string; mode: DecisionMode;
+  /** Unique per server boot: the same join code and run number after a restart is a different room. */
+  roomId: string;
   map: MapView;
   players: Record<string, PlayerView>;
   characters: Record<string, CharacterView>;
@@ -75,7 +77,7 @@ const MAX_EVENTS = 600;
 
 export const useGame = create<GameState>((set, get) => ({
   conn: "idle", session: null,
-  roomCode: "", runId: "", seed: 0, ruleVersion: "", mode: "drex", map: CITY_MAP,
+  roomCode: "", runId: "", roomId: "", seed: 0, ruleVersion: "", mode: "drex", map: CITY_MAP,
   players: {}, characters: {}, npcs: {}, missions: {}, listings: {}, trades: [], events: [],
   metrics: null, experiments: [], policy: null, providerStatus: null, wallet: null,
   serverTimeMs: 0, tick: 0, lastTick: null, selectedAgentId: null, selectedEventId: null, selectedTicker: null,
@@ -93,7 +95,7 @@ export const useGame = create<GameState>((set, get) => ({
     const st = get();
     // Same run (e.g. the snapshot pushed after someone respawns): keep the longer local log and merge.
     // New run (seeded reset) or first join: start the timeline clean.
-    const sameRun = st.runId !== "" && st.runId === s.runId && st.roomCode === s.roomCode;
+    const sameRun = st.runId !== "" && st.runId === s.runId && st.roomCode === s.roomCode && st.roomId === s.roomId;
     let events = [...s.recentEvents].sort((a, b) => a.serverSequence - b.serverSequence);
     if (sameRun && st.events.length) {
       const have = new Set(events.map((e) => e.eventId));
@@ -102,7 +104,7 @@ export const useGame = create<GameState>((set, get) => ({
     }
     if (!sameRun) set({ selectedEventId: null, selectedTicker: null, crash: null });
     set({
-      roomCode: s.roomCode, runId: s.runId, seed: s.seed, ruleVersion: s.ruleVersion, mode: s.mode, map: s.map ?? CITY_MAP,
+      roomCode: s.roomCode, runId: s.runId, roomId: s.roomId, seed: s.seed, ruleVersion: s.ruleVersion, mode: s.mode, map: s.map ?? CITY_MAP,
       players: byId(s.players), characters: byId(s.characters), npcs: byId(s.npcs), missions: byId(s.missions),
       listings: Object.fromEntries(s.listings.map((l) => [l.ticker, l])), trades: s.trades, events,
       metrics: s.metrics, experiments: s.experiments ?? [], policy: s.policy, providerStatus: s.providerStatus,
@@ -140,9 +142,10 @@ export const useGame = create<GameState>((set, get) => ({
   applyEvent(e) {
     const st = get();
     const last = st.events.length ? st.events[st.events.length - 1]! : null;
-    if (e.runId !== st.runId && st.runId) {
-      // new run (reset): the snapshot that follows replaces everything
-      set({ events: [e], runId: e.runId });
+    if (st.runId && (e.runId !== st.runId || (st.roomId !== "" && e.roomId !== st.roomId))) {
+      // New run (seeded reset) or a restarted server: the snapshot that follows replaces everything. The old run's
+      // selection must go now, or the whole new timeline stays dimmed around an event that no longer exists.
+      set({ events: [e], runId: e.runId, roomId: e.roomId, selectedEventId: null, selectedTicker: null, crash: null });
       return true;
     }
     if (last && e.serverSequence <= last.serverSequence) {

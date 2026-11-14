@@ -44,7 +44,9 @@ function useControls(): void {
   useEffect(() => {
     const down = new Set<string>();
     let lastX = 0, lastZ = 0;
-    const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    // Only text entry swallows game keys: a focused checkbox, radio or button must not disable WASD, E and R.
+    const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image"]);
+    const typing = (t: EventTarget | null) => t instanceof HTMLElement && ((t.tagName === "INPUT" && !NOT_TEXT.has((t as HTMLInputElement).type)) || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
     const pushMove = () => {
       const st = useGame.getState();
       const me = selectMyCharacter(st);
