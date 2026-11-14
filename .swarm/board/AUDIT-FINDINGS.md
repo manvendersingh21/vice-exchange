@@ -17,12 +17,12 @@ were never attempted by a fixer. FIXED items name the commit; each has a regress
 | high | engine | engine | `engine/RoomEngine.ts:354` | player.pose speed check is defeated by banked idle time and by its 50 ms floor (teleport) | FIXED f57a9b9 |
 | high | scene2d | scene2d | `web/scene/canvas/CanvasCity.tsx:129` | 2D interpolation switches off once an avatar is 25 m from its stale store position | FIXED 8191127 |
 | high | web | web | `web/state/gameStore.ts:145` | Seeded reset keeps the selected timeline event: whole timeline dimmed, wrong event highlighted, auto-follow off | FIXED 8191127 |
-| medium | economy | economy | `economy/index.ts:158` | A single wallet can farm the house risk-free by trading against the expiry of its own sentiment entries (+263 per 80 s at a V$95 spot) | OPEN |
+| medium | economy | economy | `economy/index.ts:158` | A single wallet can farm the house risk-free by trading against the expiry of its own sentiment entries (+263 per 80 s at a V$95 spot) | FIXED (anti-echo fills) |
 | medium | security | engine | `rooms/RoomManager.ts:91` | Every tokenless join mints a permanent player, character and listing: one socket can grow the room without bound | OPEN |
 | medium | security | engine | `transport/app.ts:62` | Origin allow-list is not enforced: the Socket.IO WebSocket and /bridge accept connections from any web origin | OPEN |
 | medium | security | engine | `engine/compose.ts:41` | Anonymous room creators get director powers with server-wide effects: provider budgets multiply per room and one client can hold the global experiment runner | OPEN |
 | medium | store | store | `replay/cli.ts:17` | Replay CLI resolves a room code to the newest boot only; recorded sessions from before a restart cannot be selected | OPEN |
-| medium | store | store | `metrics/index.ts:102` | metrics.decisions.stale is always 0: the regex never matches the reasons Brains actually produces | OPEN |
+| medium | store | store | `metrics/index.ts:102` | metrics.decisions.stale is always 0: the regex never matches the reasons Brains actually produces | FIXED 587f8ef |
 | medium | scene2d | scene2d | `web/scene/canvas/CanvasCity.tsx:69` | Returning to a background tab or reconnecting fires every missed event as one simultaneous effect burst | OPEN |
 | medium | scene2d | scene2d | `web/scene/canvas/CanvasCity.tsx:172` | Ambient traffic is mounted without keepClear, so decorative cars drive through NPC agents, job markers and spawns | OPEN |
 | medium | web | web | `web/net/socketClient.ts:37` | After two quick connection drops, or a failed re-join, the client is 'connected' but no longer in the room | OPEN |
