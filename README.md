@@ -1,10 +1,15 @@
 # VICE EXCHANGE
 
-VICE EXCHANGE is a multiplayer simulation set in an original neon city, Coral Bay. Every outlaw character is a
-tradable fictional ticker. Eight NPCs (two witnesses, two informants, two traders, two police officers) each
-decide what to do with a real Nace Drex `choice` call built only from their own private memory. Information
-spreads only through recorded messages, and capturing a wanted character sets its ticker to exactly V$0. It was
-built for the Nace AI Drexathon, Swarm Intelligence track.
+> **The game is Open Theft Auto, modified.** The city you play in is the MIT-licensed open-source Godot game Open Theft Auto (https://github.com/mehulkapadia5/open-theft-auto) with our bridge applied (`integrations/ota-bridge`): its streets, guns, cars and helicopter, populated by our Drex-driven agents and connected to our authoritative server. The browser app is the trading-floor terminal beside it: market, agent inspector, swarm graph, demo director. The browser also has its own 2D and 3D city views as a fallback.
+
+VICE EXCHANGE is a trading floor inside an original neon city, Coral Bay, where every agent thinks for itself.
+Nine agents decide with a real Nace Drex `choice` call built only from their own private memory: two witnesses, two
+informants, two traders, two police officers, and a fugitive, Ryder, who plays the outlaw by himself. Every outlaw is a
+tradable fictional ticker whose value and bounty grow the longer it survives. The other agents report it, sell what
+they know, trade it and hunt it; capture sets the ticker to exactly V$0. Humans can join as outlaws, as hunters (alone
+or in a crew) or as spectators. It was built for the Nace AI Drexathon, Swarm Intelligence track: "Build systems where
+multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls." The pitch, mapped to those
+words, is in [`docs/PITCH.md`](docs/PITCH.md).
 
 **V$ are fictional, nonredeemable game credits. There is no real money, no cash-out and no payment code anywhere in this repository.**
 
@@ -50,11 +55,21 @@ Status values: **verified by automated test**, **verified by a live run**, **imp
 | Background Meta comparison for each live Drex decision (shadow) | Verified by automated test and by a live run | `apps/server/test/shadow.test.ts`; 7 of 8 and 5 of 5 agreement in two live rooms |
 | NDI grounding: nine quoted rules from a real police order in every police decision | Verified by automated test and by a live run | `apps/server/src/policy/*.test.ts`; `npm run ndi:ingest`; live police decisions carried 9 citations |
 | Browser UI: 3D city, 2D city, market, agent inspector, event timeline, swarm graph, decision cards, ticker tape, crash sequence, director panel | Verified by a live run | Screenshots from the demo rehearsal in headless Chrome. The 3D view rendered there on the second attempt; an earlier attempt during development fell back to the 2D map, which is the designed behaviour on failure. |
-| WORLD view: the Godot client embedded in the browser | Implemented but unverified | `apps/web/src/components/WorldFrame.tsx`; needs a local Web export that is not in the repository; not opened for this document |
+| WORLD view: the Godot client embedded in the browser, joined as the page's own player | Seen in a headless run | `apps/web/src/components/WorldFrame.tsx`, `apps/server/test/companion.test.ts`. Needs a local Web export (356 MB, not in the repository); first load 38 s, 7 to 17 fps measured under heavy load; never run in a real Chrome window; mouse look unconfirmed |
 | Godot world client (native) | Verified by a live run, headless only | `godot --headless --path integrations/open-theft-auto -- --vice-check ...` printed `VICE_BRIDGE_OK`; windowed play was captured by its author in `integrations/ota-bridge/frames/` and was not run for this document |
+| Fugitive agent "Ryder": a Drex-driven outlaw with its own ticker that thinks every 6 s (`do_job`, `lay_low`, `flee`, `fire`), acts through the same commands as a human and respawns 12 s after capture | Verified by automated test; present in the live room (`RYD-02` listed at 13:56); a full live hunt not yet watched | `apps/server/src/demo/Fugitive.ts`, `apps/server/test/fugitive.test.ts` (8 tests); `FUGITIVE=0` turns it off |
+| 3D camera: drag to orbit, scroll to zoom, `C` presets, `V` reset; WASD follows the camera | Seen in a real run | Direction error 0 degrees at six camera angles, measured from the server snapshot; right-drag and pinch not driven |
+| Parked cars are solid: 26 cars shared by server, 3D and 2D; players slide along them, NPCs route around them | Verified by automated test and seen in a real run | `apps/server/test/cars.test.ts` (12 tests); 3D run stopped at the car edge. Moving traffic is scenery |
+| Stun pulse (`F`): 6 charges, 16 m, 3 s stun, no damage; an outlaw's shot adds heat and is witnessed by NPCs | Verified by automated test; hunter stunning an outlaw seen in a real 2D run | `apps/server/test/weapon.test.ts` (10 tests). Outlaw firing back, stun-then-capture and the 3D tracer: not yet seen in a browser |
+| Hunter crews: join by HUD field or `&crew=NAME`, up to 4; bounty split among crewmates within 25 m; stunning a crewmate and capturing within 12 s is a double-cross | Verified by automated test; joining seen in a real run | `apps/server/test/crew.test.ts`. The split and the double-cross: not yet seen in a browser |
+| Traders decide on a ticker when a crew forms against it; an outlaw's gunfire travels as "Shots fired" in gossip and relays | Verified by automated test | `apps/server/test/crew-swarm.test.ts`. Not yet seen in a browser |
+| Informant side deals: `sell_to_crew` or `warn_outlaw` for a V$40 fee, with a recorded side switch | Verified by automated test | `apps/server/test/crew-swarm.test.ts`. Tips are ordinary room events, not private; the fee is a counter, not wallet credits. Not yet seen in a browser |
+| Godot world: left mouse fires the stun pulse, `F` takes a car or boards a helicopter parked in the district | Seen in real runs with two Godot clients | Stills and a 22 s clip in `integrations/ota-bridge/frames/`. Shots were sent through the trigger's function by a test driver; altitude is not sent to the server; crews are ignored |
+| UDP stream for the native Godot client: poses up and world state down at 30 Hz on port 3002, WebSocket for everything reliable | Verified by automated test and by a headless client | `apps/server/test/udp.test.ts` (8 tests); 29 Hz received, 0% loss. Smoothness not compared in a window; the browser WORLD view stays on WebSocket |
+| Demo videos with narration | In the repository; being re-recorded | `demo/vice-exchange-demo.mp4` (3:00) and `demo/vice-exchange-npcs.mp4` (0:53) are the first cut: 2D footage at 3 to 6 fps with a synthetic voice. See `demo/README.md` |
 | End-to-end harness in three Chrome contexts with live providers | Verified by a live run, with failures | `npm run e2e`; see "End-to-end report" below |
 | Persistent rooms across a server restart, accounts, matchmaking, cloud deployment | Not built | A restart starts a fresh `VICE-42`; logs of earlier runs stay in SQLite |
-| Pre-recorded fallback video (spec section 9) | Not built | No recording is in the repository |
+| Pre-recorded fallback video (spec section 9) | In the repository | `demo/` (two narrated cuts) and `integrations/ota-bridge/frames/*.mp4` (two 3D world clips) |
 
 ### End-to-end report
 
@@ -66,6 +81,7 @@ while this file was written, and three reports read during that time gave three 
 | 20:59:42 | 76 of 79 | `S02.socket-building` (a pose inside a building was accepted), `S05.inspector` (the click on the map did not select the NPC; the inspector content itself was correct), `S10.store` |
 | 21:04 (cited by the build lead, not read for this document) | all 12 scenario steps passed | one extra socket-level check, `SX.pose-into-building` |
 | 21:11:34 | 69 of 74 | `S02.pixels`, `S07.capture` (no officer came within sight of the staged outlaw in 60 s, so it never became wanted), `S08.respawn` (blocked by S07), `S11.ui`, `S12.captures` |
+| 21:30 | 11 of 13 scenario steps | `S03.socket-idempotent` (failed on the provider-failure instance) and `S07.socket-concurrent` (blocked: the scripted hunters' test moves were rejected as too fast). 12 live decisions: 10 Drex, 2 guardrail, 0 fallback; Drex median 355 ms; shadow 12 of 12 agreed, Meta median 722 ms |
 
 Measured in the 21:11 run: 9 live Drex decisions across all four roles, median round trip 341 ms; shadow
 comparison 10 of 10 in agreement, medians 341 ms for Drex and 715 ms for Meta. Read the current file before you
@@ -167,7 +183,7 @@ Run from the repository root. "Checked" says what was done for this document.
 | `npm run dev:web` | Vite dev server | Run on a spare port: `VICE_SERVER=http://localhost:3477 npm run dev:web -- -- --port 5477`; the page and the proxied `/health` answered |
 | `npm run start:server` | Server without watch mode | Run on a spare port; used for every live run in this document |
 | `npm run typecheck` | `tsc --noEmit` in every workspace | Run: exit code 0 for contracts, server and web |
-| `npm test` | Server test suite (vitest) | Run at 13:15: 153 tests in 12 files, all passed |
+| `npm test` | Server test suite (vitest) | Run at 13:57: 247 tests in 24 files, all passed |
 | `npm run build` | Production build of the web app | Run with the output redirected to a scratch folder: built in 3.6 s, with Vite's warning that two chunks exceed 500 kB |
 | `npm run replay` | Lists recorded runs. `npm run replay -- <roomCode or roomId> [runId]` prints a run rebuilt from SQLite. | Both forms run against a scratch database: "57 events, 8 recorded decisions, 0 model calls made" |
 | `npm run ndi:ingest` | Runs the policy ingestion once and prints the document, the NDI job ids and the facts. `-- --force` pays for new jobs, `-- --json` prints JSON, `-- --no-color` prints plain text. | Run without `--force`: cache hit, no NDI call, 3 ms |
