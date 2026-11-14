@@ -62,6 +62,13 @@ export class RoomEngine implements WorldPort {
   /** Per-officer chase/search record. `departAtMs` is when an investigation actually sets off (dispatch delay); `pace` is its walking speed. */
   private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null; departAtMs: number; pace: number }>();
   private storyOf = new Map<string, string>();
+  /**
+   * Causal anchors (FR-061) so a capture traces back to the mission: the event that made each character wanted,
+   * each officer's latest sighting of a character (key `${npcId}:${characterId}`), and each NPC's latest applied action.
+   */
+  private wantedEventOf = new Map<string, string>();
+  private sightingEventOf = new Map<string, string>();
+  private actionEventOf = new Map<string, { eventId: string; correlationId: string }>();
   private nav = new Map<string, { goal: Vec2; path: Vec2[]; at: number }>();
   private policyAnnounced = false;
 
@@ -91,6 +98,7 @@ export class RoomEngine implements WorldPort {
       causationId: opts.causationId ?? null, correlationId: opts.correlationId ?? this.nextId("story"), payload,
     };
     try { prepare?.(e); } catch (err) { console.error("[engine] event prepare failed", type, err); }
+    if (type === "AGENT_ACTION_APPLIED") this.actionEventOf.set(actorId, { eventId, correlationId: e.correlationId });
     this.events.push(e as GameEvent);
     if (this.events.length > MAX_EVENTS_IN_MEMORY) this.events.splice(0, this.events.length - MAX_EVENTS_IN_MEMORY);
     this.markDirty(e as GameEvent);
@@ -200,7 +208,7 @@ export class RoomEngine implements WorldPort {
     };
     this.events = [];
     this.lastTickAtMs = now; this.nextMissionAtMs = null; this.nextMissionSpot = 0; this.policyAnnounced = false;
-    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav]) m.clear();
+    for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav, this.wantedEventOf, this.sightingEventOf, this.actionEventOf]) m.clear();
   }
   private bootRun(first: boolean, previousRunId?: string): void {
     const s = this.state;
@@ -458,7 +466,7 @@ export class RoomEngine implements WorldPort {
     this.dirty.characters.add(c.id);
     if (c.status === "ACTIVE" && c.heat >= RULES.heat.wantedThreshold) {
       c.status = "WANTED";
-      this.emit("WANTED_STATUS_CHANGED", c.id, { characterId: c.id, ticker: c.ticker, wanted: true, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), reason }, opts);
+      this.wantedEventOf.set(c.id, this.emit("WANTED_STATUS_CHANGED", c.id, { characterId: c.id, ticker: c.ticker, wanted: true, heat: Math.round(c.heat), wantedLevel: wantedLevel(c.heat), reason }, opts).eventId);
     }
     this.reprice(c, "HEAT", opts);
   }
@@ -547,11 +555,18 @@ export class RoomEngine implements WorldPort {
     const owner = s.players[t.playerId]; if (owner) owner.moveDir = { x: 0, z: 0 };
     for (const n of Object.values(s.npcs)) if (n.targetCharacterId === t.id) this.setNpcActivity(n.id, n.role === "POLICE" ? "PATROL" : "IDLE", {});
     const correlationId = this.storyOf.get(t.id) ?? this.nextId("story");
+    // FR-061: an officer's capture is caused by its pursuit (its latest applied action in this story, else its latest
+    // sighting of the target); a hunter's capture by the event that made the target wanted. The timeline can then
+    // trace capture -> pursuit -> sighting -> wanted -> bulletin -> report -> witness -> mission.
+    const lastAction = a.captorKind === "NPC" ? this.actionEventOf.get(a.captorId) : undefined;
+    const cause = (lastAction && lastAction.correlationId === correlationId ? lastAction.eventId : undefined)
+      ?? (a.captorKind === "NPC" ? this.sightingEventOf.get(`${a.captorId}:${t.id}`) : undefined)
+      ?? this.wantedEventOf.get(t.id) ?? null;
     const cap = this.emit("CAPTURE_SUCCEEDED", a.captorId, {
       captureId: this.nextId("cap"), commandId: a.commandId, characterId: t.id, ticker: t.ticker, captorId: a.captorId, captorName: a.captorName, captorKind: a.captorKind,
       captorWalletId: bounty > 0 ? a.walletId : null, bounty, captorBalanceAfter, referenceAtCapture: halt?.referenceAtHalt ?? q?.referenceValue ?? 0,
       spotBeforeCapture: halt?.finalSpotBeforeHalt ?? q?.spotPrice ?? 0, survivalSeconds: Math.floor((now - t.spawnTimeMs) / 1000),
-    }, { correlationId });
+    }, { correlationId, causationId: cause });
     if (t.ticker && halt) {
       const o = { causationId: cap.eventId, correlationId };
       this.emit("LISTING_HALTED", "exchange", { ticker: t.ticker, characterId: t.id, status: "HALTED_CAPTURED", finalSpotBeforeHalt: halt.finalSpotBeforeHalt }, o);
@@ -688,12 +703,13 @@ export class RoomEngine implements WorldPort {
         const d = Math.round(dist(n, c) * 10) / 10; const correlationId = this.storyOf.get(c.id) ?? this.nextId("story");
         const summary = `Has eyes on wanted ${c.nickname}${c.ticker ? ` (${c.ticker})` : ""}, ${d} m away.`;
         const memId = this.nextId("mem");
-        const obs = this.emitWith("NPC_OBSERVED", n.id, { npcId: n.id, memoryId: memId, factType: "SIGHTING", subjectCharacterId: c.id, distance: d, incidentId: null, summary }, { correlationId }, (e) => {
+        const obs = this.emitWith("NPC_OBSERVED", n.id, { npcId: n.id, memoryId: memId, factType: "SIGHTING", subjectCharacterId: c.id, distance: d, incidentId: null, summary }, { correlationId, causationId: this.wantedEventOf.get(c.id) ?? null }, (e) => {
           this.deps.memory.remember({
             agentId: n.id, factType: "SIGHTING", subjectCharacterId: c.id, subjectTicker: c.ticker, eventId: e.eventId, sourceActorId: n.id, sourceKind: "DIRECT", sourceMemoryId: null, hop: 0,
             observedAtMs: now, expiresAtMs: now + RULES.memory.ttlMs.SIGHTING, confidence: RULES.memory.confidence.DIRECT, summary, payload: { x: c.x, z: c.z, ticker: c.ticker }, citation: null,
           }, memId);
         });
+        this.sightingEventOf.set(key, obs.eventId);
         this.addHeat(c, RULES.heat.perPoliceSighting, "police sighting", { causationId: obs.eventId, correlationId });
       }
     }
