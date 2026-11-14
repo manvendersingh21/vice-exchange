@@ -35,6 +35,8 @@ interface Session {
   ws: WebSocket;
   roomCode: string | null;
   sessionToken: string | null;
+  /** True when this socket acts for a player whose browser socket is still attached. */
+  companion?: boolean;
   playerId: string | null;
   offEvent: (() => void) | null;
   tokens: number;
@@ -142,8 +144,26 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
       if (!parsed.success) return reply({ ok: false, id, error: { code: "INVALID_COMMAND", message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ").slice(0, 300) } });
       const cmd = parsed.data;
       try {
+        // Companion attach: the browser UI embeds a 3D world client that plays AS the page's own player. It presents
+        // that player's session token; while the browser socket is still attached we do not take the session over
+        // (wallet pushes and disconnect handling stay with the browser), we only let this socket act for the player.
+        if (cmd.type === "room.join" && cmd.sessionToken) {
+          const room = rooms.get(cmd.roomCode);
+          const owner = room ? Object.values(room.engine.state.players).find((p) => p.sessionToken === cmd.sessionToken && p.connected && !!p.socketId && !p.socketId.startsWith("bridge:")) : undefined;
+          if (room && owner) {
+            leave(s);
+            const full = rooms.result(room, owner.id);
+            s.roomCode = room.code; s.playerId = owner.id; s.sessionToken = full.sessionToken; s.companion = true;
+            s.offEvent = room.engine.onEvent((e: GameEvent) => send(s, { t: "event", e }));
+            const { snapshot: _omit, ...slim } = full as JoinResult;
+            reply({ ok: true, id: cmd.requestId, result: slim });
+            sendState(s);
+            return;
+          }
+        }
         if (cmd.type === "room.create" || cmd.type === "room.join") {
           leave(s);
+          s.companion = false;
           const r = rooms.join(cmd, `bridge:${s.id}`);
           if (!r.ok || !r.room || !r.playerId) return reply({ ok: false, id: r.id, error: r.error });
           const room = r.room;
@@ -159,7 +179,7 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
         const room = roomOf(s);
         const p = room ? playerOf(s, room) : undefined;
         if (!room || !p) return reply({ ok: false, id, error: { code: "NOT_JOINED", message: "Join a room first" } });
-        reply(room.engine.dispatch(p.id, cmd));
+        reply(room.engine.dispatch(p.id, cmd, { external: true }));
         if (cmd.type !== "player.move" && cmd.type !== "player.pose") sendState(s);
       } catch (err) {
         console.error("[bridge] command failed", cmd.type, err);

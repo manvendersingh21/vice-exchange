@@ -93,7 +93,7 @@ export const VIEW_JS = `(() => {
     timeline: all(".tl-list .ev").map((e) => ({ text: txt(e), cls: e.className })),
     chainButton: chainBtn ? txt(chainBtn) : null,
     notice: txt(document.querySelector(".notice")),
-    crash: txt(document.querySelector(".cc-root") || document.querySelector(".crash")),
+    crash: (() => { const c = document.querySelector(".cc-root") || document.querySelector(".crash"); return c ? ((c.innerText || c.textContent || "").replace(/\s+/g, " ").trim() || null) : null; })(),
     overlay: !!document.querySelector(".cc-root, .crash"),
     tape: txt(document.querySelector(".vxt")),
     tabs: all(".tabs button[role=tab]").map(txt),
@@ -175,6 +175,38 @@ export async function click(a: Actor, selector: string, o: { timeout?: number } 
   await a.page.click(selector, { timeout: o.timeout ?? 6000 });
 }
 
+/** Uses the header's 2D / 3D toggle and waits until the city view has really switched. */
+export async function setView(a: Actor, mode: "2D" | "3D"): Promise<boolean> {
+  const flat = "Live map of Coral Bay";
+  const is = async (): Promise<boolean> => {
+    const v = await view(a);
+    const on = v.seg.find((b) => b.on)?.text;
+    const label = v.canvas?.label ?? "";
+    return on === mode && (mode === "2D" ? label.startsWith(flat) : !label.startsWith(flat) && v.canvasCount >= 1);
+  };
+  if (await is()) return true;
+  await click(a, `.hdr .seg button:text-is("${mode}")`).catch(() => {});
+  const end = Date.now() + (mode === "3D" ? 25000 : 8000);
+  while (Date.now() < end) { if (await is()) return true; await sleep(200); }
+  return false;
+}
+
+/** Opens one NPC in the Agent Inspector through its chip; retries, and says what went wrong if it cannot. */
+export async function selectAgentByChip(a: Actor, npcName: string): Promise<{ ok: boolean; attempts: number; error: string | null }> {
+  const last = npcName.split(" ").slice(-1)[0]!;
+  let error: string | null = null;
+  for (let i = 1; i <= 3; i++) {
+    const v0 = await view(a);
+    if (v0.agentName === npcName) return { ok: true, attempts: i - 1, error };
+    await dismissOverlay(a);
+    try { await a.page.click(`.inspector .chips .chip:has-text("${last}")`, { timeout: 5000 }); }
+    catch (e) { error = String((e as Error).message).split("\n").slice(0, 3).join(" ").slice(0, 300); }
+    const got = await until(async () => ((await view(a)).agentName === npcName ? true : null), 2500, 100);
+    if (got) return { ok: true, attempts: i, error };
+  }
+  return { ok: false, attempts: 3, error };
+}
+
 export async function until<T>(fn: () => Promise<T | null | undefined | false> | T | null | undefined | false, timeoutMs: number, everyMs = 100): Promise<T | null> {
   const end = Date.now() + timeoutMs;
   for (;;) {
@@ -188,12 +220,16 @@ export async function until<T>(fn: () => Promise<T | null | undefined | false> |
 
 export class Shots {
   constructor(private dir: string, private rec: Recorder) {}
-  async one(a: Actor, name: string): Promise<string | null> {
+  /** Slowest capture so far (ms): 3D pages need a GPU read-back, which matters for time-critical frames. */
+  slowestMs = 0;
+  /** `fast` skips the full-page measuring pass (the app never scrolls, so the picture is the same). */
+  async one(a: Actor, name: string, fast = false): Promise<string | null> {
     const file = path.join(this.dir, `${name}-${a.key}.png`);
-    try { await a.page.screenshot({ path: file, fullPage: true, timeout: 15000 }); this.rec.screenshots.push(file); return file; }
+    const t0 = Date.now();
+    try { await a.page.screenshot({ path: file, fullPage: !fast, timeout: 15000 }); this.rec.screenshots.push(file); this.slowestMs = Math.max(this.slowestMs, Date.now() - t0); return file; }
     catch (e) { this.rec.note(`screenshot ${name}-${a.key} failed: ${(e as Error).message.slice(0, 160)}`); return null; }
   }
-  async all(actors: Actor[], name: string): Promise<Array<string | null>> { return Promise.all(actors.map((a) => this.one(a, name))); }
+  async all(actors: Actor[], name: string, fast = false): Promise<Array<string | null>> { return Promise.all(actors.map((a) => this.one(a, name, fast))); }
   /** Screenshot of one rectangle, decoded, with colour statistics. */
   async region(a: Actor, r: { x: number; y: number; w: number; h: number }, saveAs?: string): Promise<{ img: Image; stats: RegionStats } | null> {
     try {

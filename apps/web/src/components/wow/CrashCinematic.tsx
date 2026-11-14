@@ -2,7 +2,7 @@
 //
 // Mount once, anywhere inside the app tree (it renders through a portal on <body>): <CrashCinematic />
 // It listens to the game store for a CAPTURE_SUCCEEDED / LISTING_HALTED pair that arrives LIVE, then plays
-// ~4.7 s: flash + shake, the ticker huge, the last price crashing to exactly V$0, a price line falling off a
+// ~4.5 s: flash + shake, the ticker huge, the last price crashing to exactly V$0, a price line falling off a
 // cliff, the capture facts, and a stamped "HALTED · V$0" plate. Click or Escape dismisses early.
 //
 // - Never replays history: events present at mount, and events that arrive inside a snapshot (join, resync,
@@ -23,11 +23,11 @@ import {
   TL, buildFx, clamp01, drawFx, easeInCubic, easeOutBack, easeOutCubic, energyAt, flashAt, hashString, noise, priceAt, shakeAt,
 } from "./CrashCinematicFx";
 import type { FxModel } from "./CrashCinematicFx";
-import { highestSequence, isSnapshotUpdate, isStaleEvent, pickCrashTriggers } from "./CrashCinematicTriggers";
+import { highestSequence, isSnapshotUpdate, isStaleEvent, newestSimTime, pickCrashTriggers } from "./CrashCinematicTriggers";
 import type { CrashTrigger } from "./CrashCinematicTriggers";
 import "./CrashCinematic.css";
 
-export { highestSequence, isSnapshotUpdate, isStaleEvent, pickCrashTriggers } from "./CrashCinematicTriggers";
+export { highestSequence, isSnapshotUpdate, isStaleEvent, newestSimTime, pickCrashTriggers } from "./CrashCinematicTriggers";
 export type { CaptureEvent, CrashTrigger, HaltEvent } from "./CrashCinematicTriggers";
 
 /** Length of one cinematic, fade-out included. */
@@ -35,7 +35,7 @@ export const CRASH_CINEMATIC_MS = TL.end;
 /** How long a capture waits for its halt (or the reverse) before playing with what it has. */
 const PAIR_WINDOW_MS = 160;
 const DISMISS_MS = 180;
-const CALM = { fadeIn: 320, frame: TL.out - 1, out: 4300, end: 4650 } as const;
+const CALM = { fadeIn: 320, frame: TL.out - 1, out: 4100, end: 4450 } as const;
 const GLITCH = "▚▞▓▒░#%";
 const fmt = new Intl.NumberFormat("en-US");
 
@@ -109,7 +109,7 @@ function statsOf(shot: CrashShot): Stat[] {
   }
   if (shot.bounty != null) out.push({ k: "Bounty paid", v: vd(shot.bounty), sub: shot.bounty > 0 ? "credited to the captor" : "none paid" });
   if (shot.survivalSeconds != null) out.push({ k: "Survived", v: duration(shot.survivalSeconds), sub: "spawn to capture" });
-  if (shot.referenceAtCapture != null) out.push({ k: "Reference value", v: vd(shot.referenceAtCapture), sub: "at capture" });
+  if (shot.referenceAtCapture != null) out.push({ k: "Reference", v: vd(shot.referenceAtCapture), sub: "value at capture" });
   out.push({ k: "Spot before", v: vd(shot.lastSpot), sub: "last price, now V$0" });
   return out;
 }
@@ -226,7 +226,7 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
       const split = Math.min(0.2, 0.0042 * energy);
       ghostA.style.transform = `translate3d(${(-split).toFixed(4)}em,${(split * 0.25).toFixed(4)}em,0)`;
       ghostP.style.transform = `translate3d(${split.toFixed(4)}em,${(-split * 0.25).toFixed(4)}em,0)`;
-      ghostA.style.opacity = ghostP.style.opacity = split > 0.0015 ? "0.95" : "0";
+      ghostA.style.opacity = ghostP.style.opacity = Math.min(0.95, split * 40).toFixed(3); // fades with the split, never pops
       const win = Math.floor(t / 70), act = clamp01(energy / 12);
       for (let j = 0; j < slices.length; j++) {
         const el = slices[j];
@@ -254,7 +254,7 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
           ty = (noise(gi, seed + i * 7 + 1) - 0.5) * 0.16 * wgt;
           if (noise(gi, seed + i * 13 + 5) < 0.09 * wgt) ch = GLITCH[Math.floor(noise(gi, i + 3) * GLITCH.length)]!;
         }
-        if (shown[i] !== ch) { shown[i] = ch; el.textContent = ch; el.style.display = ch ? "" : "none"; }
+        if (shown[i] !== ch) { shown[i] = ch; el.textContent = ch; el.style.display = ch ? "" : "none"; el.classList.toggle("sep", ch === ","); }
         el.style.transform = ty ? `translate3d(0,${ty.toFixed(3)}em,0)` : "";
       }
       if (pct) {
@@ -457,10 +457,11 @@ function useLiveCrashes(): { shot: CrashShot | null; waiting: number; done(): vo
       cursor = Math.max(cursor, highestSequence(st.events));
       if (!fresh.length) return;
       const serverNow = Math.max(st.serverTimeMs, st.lastTick?.serverTimeMs ?? 0);
+      const logNow = newestSimTime(st.events);
       for (const tr of fresh) {
         if (seen.has(tr.key)) continue;
         const newest = tr.halt && tr.capture ? (tr.halt.serverSequence > tr.capture.serverSequence ? tr.halt : tr.capture) : (tr.halt ?? tr.capture);
-        if (newest && isStaleEvent(newest, serverNow)) { seen.add(tr.key); pending.delete(tr.key); continue; }
+        if (newest && isStaleEvent(newest, logNow, serverNow)) { seen.add(tr.key); pending.delete(tr.key); continue; }
         if (tr.capture && tr.halt) { play(tr); continue; }
         pending.set(tr.key, tr);
         if (!timer) timer = setTimeout(settle, PAIR_WINDOW_MS);

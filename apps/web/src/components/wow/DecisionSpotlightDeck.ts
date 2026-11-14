@@ -79,7 +79,7 @@ export interface Deck {
   clear(): void;
 }
 
-const MIN_DWELL_MS = 1700;   // a resolved card is never bumped by a queued one before this
+const MIN_DWELL_MS = 2400;   // a resolved card is never bumped by a queued one before it has been readable this long
 const QUEUE_MAX = 8;
 const HOLD_GRACE_MS = 1300;
 const LOST_GRACE_MS = 9000;
@@ -208,14 +208,16 @@ export function createDeck(init: { capacity: number; dwellMs: number; exitMs: nu
     if (k) k.leavingAt = now;
     stage = stage.map((x) => (x.id === id ? { ...x, phase: "leaving" as const } : x));
   }
-  /** Oldest resolved card that has had its moment and is not being inspected. */
+  /** The resolved card that has been readable the longest (and long enough), unless someone is inspecting it. */
   function bumpable(now: number): SpotCard | null {
-    for (let i = stage.length - 1; i >= 0; i--) {
-      const c = stage[i]!;
+    let best: SpotCard | null = null, bestAge = MIN_DWELL_MS;
+    for (const c of stage) {
       const k = clocks.get(c.id);
-      if (c.phase === "resolved" && k && !k.held && now - k.since >= MIN_DWELL_MS) return c;
+      if (c.phase !== "resolved" || !k || k.held) continue;
+      const age = now - k.since;
+      if (age >= bestAge) { best = c; bestAge = age; }
     }
-    return null;
+    return best;
   }
   function admit(card: SpotCard, now: number): void {
     if (live() >= capacity) {

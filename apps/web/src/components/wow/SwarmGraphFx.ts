@@ -73,6 +73,9 @@ interface Ring { at: string | null; x: number; y: number; color: string; t0: num
 interface Bolt { from: string; to: string; color: string; t0: number; dur: number; seed: number; hit: boolean }
 interface Spark { x: number; y: number; vx: number; vy: number; color: string; t0: number; dur: number; size: number }
 interface Mote { lane: number; u: number; v: number; speed: number; size: number; phase: number }
+/** The edge keeps glowing for a moment after a comet has travelled it. */
+interface Glow { from: string; to: string; bend: number | undefined; color: string; t0: number; dur: number; width: number }
+interface Flare { x: number; y: number; r: number; color: string; t0: number; dur: number }
 
 const NOMINAL_FLIGHT_MS = 950;   // a little over the server's delivery delay
 const LOST_FLIGHT_MS = 7000;     // a message that is never delivered fades out
@@ -95,7 +98,7 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
   let reduced = reducedInit;
   let dead = false, raf = 0, last = 0, dpr = 1;
   const flights = new Map<string, Flight>();
-  const beams: Beam[] = [], rings: Ring[] = [], bolts: Bolt[] = [], sparks: Spark[] = [], motes: Mote[] = [];
+  const beams: Beam[] = [], rings: Ring[] = [], bolts: Bolt[] = [], sparks: Spark[] = [], motes: Mote[] = [], glows: Glow[] = [], flares: Flare[] = [];
   const sprites = new Map<string, HTMLCanvasElement>();
 
   const sprite = (color: string): HTMLCanvasElement => {
@@ -125,35 +128,50 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
     cap(sparks, 260);
   };
   const burst = (at: NodeGeom, color: string, now: number, power: number): void => {
-    rings.push({ at: null, x: at.x, y: at.y, color, t0: now, dur: 520, from: at.r + 1, to: at.r + 16 + power * 9, width: 2.2, alpha: 0.95 });
-    const n = Math.round(7 + power * 5);
+    rings.push({ at: null, x: at.x, y: at.y, color, t0: now, dur: 560, from: at.r + 1, to: at.r + 18 + power * 10, width: 2.6, alpha: 0.95 });
+    flares.push({ x: at.x, y: at.y, r: Math.max(26, at.r * 2.4) * (1 + power * 0.45), color, t0: now, dur: 620 });
+    cap(flares, 60);
+    const n = Math.round(9 + power * 7);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * TAU, v = 40 + Math.random() * 90 * power;
       spark(at.x + Math.cos(a) * at.r, at.y + Math.sin(a) * at.r, Math.cos(a) * v, Math.sin(a) * v, color, now, 380 + Math.random() * 320, 1.4 + Math.random() * 1.6);
     }
   };
 
+  /** The part of the edge the comet has already travelled lights up like a fibre. */
+  const litPath = (c: Curve, p: number, color: string, alpha: number, width: number): void => {
+    if (!ctx || alpha <= 0.004 || p <= 0.01) return;
+    ctx.strokeStyle = color; ctx.beginPath(); ctx.moveTo(c.x0, c.y0);
+    const n = 16;
+    for (let i = 1; i <= n; i++) { const q = curveAt(c, (p * i) / n); ctx.lineTo(q.x, q.y); }
+    ctx.globalAlpha = alpha * 0.2; ctx.lineWidth = width * 4.2; ctx.stroke();
+    ctx.globalAlpha = alpha * 0.8; ctx.lineWidth = width; ctx.stroke();
+  };
   const comet = (c: Curve, p: number, color: string, size: number, alpha: number, tail: number): void => {
     if (!ctx) return;
+    litPath(c, p, color, alpha * 0.75, size * 0.3);
     const sp = sprite(color);
-    const n = 20, span = Math.min(0.92, tail / Math.max(40, c.len));
+    const n = 26, span = Math.min(0.94, tail / Math.max(40, c.len));
     for (let i = n; i >= 1; i--) {
       const t = p - (i / n) * span;
       if (t < 0) continue;
-      const q = curveAt(c, t), f = 1 - i / n, r = size * (0.32 + 1.0 * f);
-      ctx.globalAlpha = alpha * (0.06 + 0.5 * f * f);
+      const q = curveAt(c, t), f = 1 - i / n, r = size * (0.4 + 1.15 * f);
+      ctx.globalAlpha = alpha * (0.08 + 0.72 * f * f);
       ctx.drawImage(sp, q.x - r, q.y - r, r * 2, r * 2);
     }
-    ctx.globalAlpha = alpha * 0.9; ctx.strokeStyle = "#ffffff"; ctx.lineWidth = size * 0.17;
+    ctx.globalAlpha = alpha; ctx.strokeStyle = "#ffffff"; ctx.lineWidth = size * 0.2;
     ctx.beginPath();
-    for (let i = 7; i >= 0; i--) {
-      const q = curveAt(c, Math.max(0, p - (i / 7) * span * 0.4));
-      if (i === 7) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+    for (let i = 8; i >= 0; i--) {
+      const q = curveAt(c, Math.max(0, p - (i / 8) * span * 0.45));
+      if (i === 8) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
     }
     ctx.stroke();
-    const h = curveAt(c, p), R = size * 2.7;
+    const h = curveAt(c, p), R = size * 3;
     ctx.globalAlpha = alpha; ctx.drawImage(sp, h.x - R, h.y - R, R * 2, R * 2);
-    ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, size * 0.4, 0, TAU); ctx.fill();
+    // anamorphic flare: one long horizontal streak and a short vertical one
+    ctx.globalAlpha = alpha * 0.85; ctx.drawImage(sp, h.x - R * 2.5, h.y - R * 0.17, R * 5, R * 0.34);
+    ctx.globalAlpha = alpha * 0.5; ctx.drawImage(sp, h.x - R * 0.13, h.y - R * 1.3, R * 0.26, R * 2.6);
+    ctx.globalAlpha = alpha; ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, size * 0.44, 0, TAU); ctx.fill();
   };
   /** Calm variant of a comet: the whole edge glows softly and fades, nothing travels. */
   const calmLine = (c: Curve, color: string, alpha: number, width: number): void => {
@@ -197,8 +215,8 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
         m.u += (m.speed * dt) / Math.max(1, w); if (m.u > 1) { m.u -= 1; m.v = Math.random(); }
         const x = lane.x0 + m.u * w, y = lane.y0 + 4 + m.v * Math.max(1, h - 8) + Math.sin(now / 900 + m.phase) * 2.2;
         const edge = Math.min(1, m.u * 8, (1 - m.u) * 8);
-        ctx.globalAlpha = (0.16 + 0.2 * (0.5 + 0.5 * Math.sin(now / 520 + m.phase * 3))) * edge;
-        const r = m.size * 2.6;
+        ctx.globalAlpha = (0.2 + 0.3 * (0.5 + 0.5 * Math.sin(now / 520 + m.phase * 3))) * edge;
+        const r = m.size * 3;
         ctx.drawImage(sprite(lane.color), x - r, y - r, r * 2, r * 2);
       }
     }
@@ -219,6 +237,22 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
       ctx.globalAlpha = a; ctx.lineWidth = Math.max(0.4, r.width * (1 - 0.55 * p)); ctx.stroke();
     }
 
+    // node flares and edge afterglow
+    for (let i = flares.length - 1; i >= 0; i--) {
+      const f = flares[i]!; const p = (now - f.t0) / f.dur;
+      if (p >= 1) { flares.splice(i, 1); continue; }
+      if (reduced) continue;
+      const r = f.r * (0.75 + 0.5 * p);
+      ctx.globalAlpha = Math.pow(1 - p, 1.6) * 0.95;
+      ctx.drawImage(sprite(f.color), f.x - r, f.y - r, r * 2, r * 2);
+    }
+    for (let i = glows.length - 1; i >= 0; i--) {
+      const gl = glows[i]!; const p = (now - gl.t0) / gl.dur;
+      const c = g.curve(gl.from, gl.to, gl.bend);
+      if (!c || p >= 1) { glows.splice(i, 1); continue; }
+      if (!reduced) litPath(c, 1, gl.color, Math.pow(1 - p, 1.3) * 0.75, gl.width);
+    }
+
     // one-shot beams
     for (let i = beams.length - 1; i >= 0; i--) {
       const b = beams[i]!; const p = (now - b.t0) / b.dur;
@@ -227,7 +261,11 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
       if (!c || p >= 1.25) { beams.splice(i, 1); continue; }
       if (reduced) { calmLine(c, b.color, Math.sin(Math.PI * Math.min(1, p / 1.25)) * 0.85, Math.max(1.2, b.size * 0.36)); continue; }
       if (p >= 1) {
-        if (!b.hit) { b.hit = true; const at = g.node(b.to); if (at && b.impact) burst(at, b.color, now, b.size / 6); }
+        if (!b.hit) {
+          b.hit = true;
+          glows.push({ from: b.from, to: b.to, bend: b.bend, color: b.color, t0: now, dur: 520, width: b.size * 0.3 }); cap(glows, 120);
+          const at = g.node(b.to); if (at && b.impact) burst(at, b.color, now, b.size / 9);
+        }
         continue;
       }
       const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
@@ -244,7 +282,7 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
         if (el > LOST_FLIGHT_MS) { flights.delete(id); continue; }
         const fade = el > LOST_FLIGHT_MS - 500 ? (LOST_FLIGHT_MS - el) / 500 : 1;
         if (reduced) calmLine(c, f.color, Math.min(1, el / 220) * 0.8 * fade, 2);
-        else { const p = cruise(el); comet(c, p, f.color, 6, Math.min(1, el / 90) * fade, 92); trailSparks(c, p, f.color, now, 0.6); }
+        else { const p = cruise(el); comet(c, p, f.color, 8.5, Math.min(1, el / 90) * fade, 120); trailSparks(c, p, f.color, now, 0.8); }
         continue;
       }
       const since = now - f.deliveredAt;
@@ -256,10 +294,11 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
       const rem = 1 - f.p0, fin = Math.max(170, rem * 560), x = Math.min(1, since / fin);
       if (x >= 1) {
         const at = g.node(f.to); if (at) burst(at, f.color, now, 1);
+        glows.push({ from: f.from, to: f.to, bend: undefined, color: f.color, t0: now, dur: 700, width: 2.6 }); cap(glows, 120);
         flights.delete(id); continue;
       }
       const p = f.p0 + rem * (1 - Math.pow(1 - x, 2));
-      comet(c, p, f.color, 6, 1, 92); trailSparks(c, p, f.color, now, 0.6);
+      comet(c, p, f.color, 8.5, 1, 120); trailSparks(c, p, f.color, now, 0.8);
     }
 
     // lightning
@@ -309,7 +348,7 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
     raf = 0;
     if (dead) return;
     draw(now);
-    const busy = flights.size > 0 || beams.length > 0 || rings.length > 0 || bolts.length > 0 || sparks.length > 0;
+    const busy = flights.size > 0 || beams.length > 0 || rings.length > 0 || bolts.length > 0 || sparks.length > 0 || glows.length > 0 || flares.length > 0;
     // Calm mode has no ambient motion, so the loop sleeps until the next effect arrives.
     if (busy || !reduced) raf = requestAnimationFrame(frame);
   }
@@ -340,7 +379,7 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
       const now = performance.now();
       const f = flights.get(id);
       if (f) { if (f.deliveredAt === null) { f.p0 = Math.min(0.97, cruise(now - f.t0)); f.deliveredAt = now; } }
-      else { beams.push({ from, to, color, t0: now, dur: 430, size: 6, bend: undefined, impact: true, tail: 92, hit: false }); cap(beams, 140); }
+      else { beams.push({ from, to, color, t0: now, dur: 430, size: 8.5, bend: undefined, impact: true, tail: 120, hit: false }); cap(beams, 140); }
       wake();
     },
     beam(from, to, o) {
@@ -358,12 +397,12 @@ export function createSwarmFx(canvas: HTMLCanvasElement, reducedInit: boolean): 
       bolts.push({ from, to, color, t0: performance.now() + delay, dur: 620, seed: Math.floor(Math.random() * 1e6), hit: false });
       cap(bolts, 12); wake();
     },
-    clear() { flights.clear(); beams.length = 0; rings.length = 0; bolts.length = 0; sparks.length = 0; wake(); },
+    clear() { flights.clear(); beams.length = 0; rings.length = 0; bolts.length = 0; sparks.length = 0; glows.length = 0; flares.length = 0; wake(); },
     destroy() {
       dead = true;
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
-      flights.clear(); beams.length = 0; rings.length = 0; bolts.length = 0; sparks.length = 0; motes.length = 0; sprites.clear();
+      flights.clear(); beams.length = 0; rings.length = 0; bolts.length = 0; sparks.length = 0; glows.length = 0; flares.length = 0; motes.length = 0; sprites.clear();
     },
   };
 }

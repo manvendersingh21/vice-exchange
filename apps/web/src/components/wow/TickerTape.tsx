@@ -20,8 +20,8 @@ import type { TapeFx } from "./TickerTapeFx";
 import "./TickerTape.css";
 
 // ---------- constants ----------
-/** Scroll speed in strip-heights per second: about 129 px/s on a 34 px strip, the same reading pace at any scale. */
-const SPEED_PER_H = 3.8;
+/** Scroll speed in strip-heights per second: about 143 px/s on a 34 px strip, the same reading pace at any scale. */
+const SPEED_PER_H = 4.2;
 const LOOKAHEAD_PER_H = 0.9;
 const MAX_CELLS = 48;
 const FLASH_MS = 4400;
@@ -82,11 +82,12 @@ function baseline(l: ListingView): { open: number; exact: boolean } {
   return { open: first?.spot ?? l.spotPrice, exact: false };
 }
 
-const SPARK_W = 64, SPARK_H = 20;
-function sparkGeometry(history: PricePoint[]): { line: string; area: string; x: number; y: number } | null {
+const SPARK_W = 100, SPARK_H = 20;
+/** Geometry in a 100 x 20 box that the SVG stretches to whatever width the cell gives it. */
+function sparkGeometry(history: PricePoint[]): { line: string; area: string; y: number } | null {
   const n = history.length;
   if (n < 2) return null;
-  const MAX = 44;
+  const MAX = 56;
   const pts: PricePoint[] = [];
   if (n <= MAX) pts.push(...history);
   else for (let i = 0; i < MAX; i++) pts.push(history[Math.round((i * (n - 1)) / (MAX - 1))]!);
@@ -94,28 +95,23 @@ function sparkGeometry(history: PricePoint[]): { line: string; area: string; x: 
   let lo = Infinity, hi = -Infinity;
   for (const p of pts) { if (p.spot < lo) lo = p.spot; if (p.spot > hi) hi = p.spot; }
   if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
-  const padY = 3, x1 = SPARK_W - 4;
-  const X = (t: number) => 1 + ((t - t0) / span) * (x1 - 1);
+  const padY = 3;
+  const X = (t: number) => ((t - t0) / span) * SPARK_W;
   const Y = (v: number) => SPARK_H - padY - ((v - lo) / (hi - lo)) * (SPARK_H - padY * 2);
   let line = "";
   for (let i = 0; i < pts.length; i++) line += `${i ? "L" : "M"}${X(pts[i]!.t).toFixed(1)},${Y(pts[i]!.spot).toFixed(1)}`;
-  const last = pts[pts.length - 1]!;
-  return { line, area: `${line}L${x1.toFixed(1)},${SPARK_H}L1,${SPARK_H}Z`, x: X(last.t), y: Y(last.spot) };
+  return { line, area: `${line}L${SPARK_W},${SPARK_H}L0,${SPARK_H}Z`, y: Y(pts[pts.length - 1]!.spot) };
 }
 
 function Spark({ history }: { history: PricePoint[] }): ReactElement {
   const g = useMemo(() => sparkGeometry(history), [history]);
   return (
-    <svg className="vxt-spark" viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} aria-hidden>
-      {g ? (
-        <>
-          <path className="ar" d={g.area} />
-          <path className="ln" d={g.line} />
-          <circle className="halo" cx={g.x} cy={g.y} r={1.9} />
-          <circle className="dot" cx={g.x} cy={g.y} r={1.7} />
-        </>
-      ) : <path className="ln" d={`M1,${SPARK_H / 2}L${SPARK_W - 4},${SPARK_H / 2}`} />}
-    </svg>
+    <span className="vxt-spark" aria-hidden>
+      <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none">
+        {g ? <><path className="ar" d={g.area} /><path className="ln" d={g.line} /></> : <path className="ln" d={`M0,${SPARK_H / 2}L${SPARK_W},${SPARK_H / 2}`} />}
+      </svg>
+      {g && <i className="vxt-spark-dot" style={{ top: `${(g.y / SPARK_H) * 100}%` }} />}
+    </span>
   );
 }
 
@@ -186,21 +182,26 @@ const ListingCell = memo(function ListingCell({ ticker, feed, calm }: { ticker: 
       aria-label={label} title={`${label} Click to select it in the market panel.`}
       onClick={() => useGame.setState({ selectedTicker: ticker })}>
       <span className="vxt-sym">{ticker}</span>
-      <Spark history={l.history} />
-      {halted ? (
-        <>
-          <s className="vxt-halt">V$0 HALTED</s>
-          {l.finalSpotBeforeHalt != null && <span className="vxt-was">was {money(l.finalSpotBeforeHalt)}</span>}
-        </>
-      ) : (
-        <>
-          <Odometer value={l.spotPrice} />
-          <span className="vxt-chg"><Arrow />{fmtPct(pct)}</span>
-          {wanted && (
-            <span className="vxt-heat"><Flame />WANTED<span className="vxt-pips">{[0, 1, 2, 3, 4].map((i) => <i key={i} className={i < heat ? "on" : undefined} />)}</span></span>
-          )}
-        </>
-      )}
+      {/* Fixed-width middle: the sparkline gives up room to the WANTED chip, so the cell itself never changes width. */}
+      <span className="vxt-mid">
+        <span className={wanted ? "vxt-heat-slot on" : "vxt-heat-slot"}>
+          <span className="vxt-heat"><Flame />WANTED<span className="vxt-pips">{[0, 1, 2, 3, 4].map((i) => <i key={i} className={i < heat ? "on" : undefined} />)}</span></span>
+        </span>
+        <Spark history={l.history} />
+      </span>
+      <span className="vxt-right">
+        {halted ? (
+          <>
+            <s className="vxt-halt">V$0 HALTED</s>
+            {l.finalSpotBeforeHalt != null && <span className="vxt-was">was {money(l.finalSpotBeforeHalt)}</span>}
+          </>
+        ) : (
+          <>
+            <Odometer value={l.spotPrice} />
+            <span className="vxt-chg"><Arrow />{fmtPct(pct)}</span>
+          </>
+        )}
+      </span>
     </button>
   );
 });
@@ -230,14 +231,16 @@ function selectHeadline(h: Headline): void {
   if (h.ticker && st.listings[h.ticker]) useGame.setState({ selectedTicker: h.ticker });
 }
 
-const NewsCell = memo(function NewsCell({ h, fresh }: { h: Headline; fresh: boolean }): ReactElement {
+/** fresh = first showing (bright). late / recap = the event is older, so its clock time is printed. */
+const NewsCell = memo(function NewsCell({ h, fresh, late }: { h: Headline; fresh: boolean; late: boolean }): ReactElement {
   const src = h.source ? ` Decided by: ${(SOURCE_META[h.source] ?? SOURCE_META.scripted).title}.` : "";
+  const dated = (!fresh || late) && !!h.clock;
   return (
     <button type="button" tabIndex={-1} className={`vxt-cell vxt-h tone-${h.tone} ${fresh ? "is-fresh" : "is-recap"}`}
-      aria-label={`${h.label}: ${h.text}.${src}`} title={`${h.text}${fresh ? "" : ` (earlier, ${h.clock})`}.${src} Click to trace it in the event timeline.`}
+      aria-label={`${h.label}: ${h.text}.${src}`} title={`${h.text}${dated ? ` (at ${h.clock})` : ""}.${src} Click to trace it in the event timeline.`}
       onClick={() => selectHeadline(h)}>
       <span className="vxt-tag"><b>{h.label}</b></span>
-      {!fresh && h.clock && <span className="vxt-clock">{h.clock}</span>}
+      {dated && <span className="vxt-clock">{h.clock}</span>}
       <Parts parts={h.parts} />
       <SourceChip h={h} />
     </button>
@@ -248,8 +251,9 @@ const NewsCell = memo(function NewsCell({ h, fresh }: { h: Headline; fresh: bool
 type StatKind = "swarm" | "rumor" | "trades" | "latency" | "notice" | "empty";
 
 const StatCell = memo(function StatCell({ stat }: { stat: StatKind }): ReactElement | null {
-  const m = useGame((s) => s.metrics);
-  const agents = useGame((s) => Object.keys(s.npcs).length);
+  // Frozen when the cell is put on the belt: a cell must never change width while it is on screen. The next
+  // cell of this kind carries the newer numbers.
+  const [{ m, agents }] = useState(() => { const s = useGame.getState(); return { m: s.metrics, agents: Object.keys(s.npcs).length }; });
   const row = (tone: Tone, tag: string, body: ReactElement) => (
     <div className={`vxt-cell vxt-st tone-${tone}`}><span className="vxt-tag"><b>{tag}</b></span>{body}</div>
   );
@@ -302,19 +306,19 @@ function statKinds(s: GameState): StatKind[] {
 }
 
 // ---------- the belt ----------
-type Item = { kind: "listing"; ticker: string } | { kind: "news"; h: Headline; fresh: boolean } | { kind: "stat"; stat: StatKind };
+type Item = { kind: "listing"; ticker: string } | { kind: "news"; h: Headline; fresh: boolean; late: boolean } | { kind: "stat"; stat: StatKind };
 interface Cell { key: number; item: Item }
 
 const CellView = memo(function CellView({ cell, feed }: { cell: Cell; feed: TapeFeed }): ReactElement {
   const it = cell.item;
   return (
     <div className={cell.key % 2 ? "vxt-slot alt" : "vxt-slot"} data-k={cell.key}>
-      {it.kind === "listing" ? <ListingCell ticker={it.ticker} feed={feed} calm={false} /> : it.kind === "news" ? <NewsCell h={it.h} fresh={it.fresh} /> : <StatCell stat={it.stat} />}
+      {it.kind === "listing" ? <ListingCell ticker={it.ticker} feed={feed} calm={false} /> : it.kind === "news" ? <NewsCell h={it.h} fresh={it.fresh} late={it.late} /> : <StatCell stat={it.stat} />}
     </div>
   );
 });
 
-interface Playlist { lastTicker: string | null; newsRun: number; flip: boolean; statIdx: number }
+interface Playlist { lastTicker: string | null; newsRun: number; flip: boolean; statIdx: number; /** listing to show next (it just became wanted, halted or listed) */ spotlight: string | null }
 interface Engine {
   cells: Cell[]; nextKey: number;
   scroll: number; speed: number; hover: boolean; snapped: boolean;
@@ -322,15 +326,22 @@ interface Engine {
   keys: number[]; lefts: number[]; rights: number[]; total: number;
   pending: boolean; syncFills: number; fx: TapeFx | null; pl: Playlist;
 }
-const newPlaylist = (): Playlist => ({ lastTicker: null, newsRun: 99, flip: false, statIdx: 0 });
+const newPlaylist = (): Playlist => ({ lastTicker: null, newsRun: 99, flip: false, statIdx: 0, spotlight: null });
 
-/** What goes on the belt next. Fresh headlines go out in causal order; breaking news takes the very next slot. */
+/** What goes on the belt next. Fresh headlines go out in causal order; a capture takes the very next slot. */
 function pickNext(e: Engine, feed: TapeFeed): Item {
   const s = useGame.getState();
   const order = listingOrder(s);
   const pl = e.pl;
-  const news = (n: NewsItem): Item => ({ kind: "news", h: n.h, fresh: n.fresh });
-  if (feed.peekPriority() >= 3) { const n = feed.takeFresh(); if (n) { pl.newsRun++; return news(n); } }
+  const news = (n: NewsItem): Item => ({ kind: "news", h: n.h, fresh: n.fresh, late: n.late });
+  if (feed.hasBreaking()) { const n = feed.takeFresh(); if (n) { pl.newsRun++; return news(n); } }
+  // A listing that just changed state (wanted, captured, newly listed) is shown right away, with its new look.
+  if (pl.spotlight) {
+    const ticker = pl.spotlight;
+    pl.spotlight = null;
+    // ...unless that listing is already the cell right before this one.
+    if (s.listings[ticker] && !(pl.lastTicker === ticker && pl.newsRun === 0)) { pl.newsRun = 0; pl.lastTicker = ticker; return { kind: "listing", ticker }; }
+  }
   // News cells allowed between two listings. A burst of events is told back to back so the tape keeps up.
   const waiting = feed.backlog();
   const quota = waiting >= 2 ? 4 : waiting === 1 ? 2 : order.length <= 1 ? 2 : 1;
@@ -359,6 +370,7 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
   const [cells, setCells] = useState<Cell[]>([]);
   const [flash, setFlash] = useState<Flash | null>(null);
   const [alert, setAlert] = useState<Headline | null>(null);
+  const alertRef = useRef<HTMLDivElement>(null);
   const [spoken, setSpoken] = useState("");
   const conn = useGame((s) => s.conn);
   const engRef = useRef<Engine | null>(null);
@@ -480,18 +492,24 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
         const root = rootRef.current, track = trackRef.current;
         if (!root || !track || !fx) break;
         const ox = root.getBoundingClientRect().left;
-        for (const el of track.querySelectorAll<HTMLElement>(`[data-ticker="${CSS.escape(sig.ticker)}"]`)) {
+        // Sparks fly from the price of every visible cell of that ticker, never from under the cap or an alert.
+        const from = (alertRef.current?.getBoundingClientRect().right ?? ox + e.h * 2.8) - ox;
+        for (const el of track.querySelectorAll<HTMLElement>(`[data-ticker="${CSS.escape(sig.ticker)}"] .vxt-right`)) {
           const r = el.getBoundingClientRect();
-          const x = r.left + r.width * 0.62 - ox;
-          if (x > 0 && x < e.w) fx.burst(x, sig.side === "BUY" ? "#3ee68a" : "#ff5468", 16);
+          const x = r.left + r.width * 0.2 - ox;
+          if (x > from && x < e.w) fx.burst(x, sig.side === "BUY" ? "#3ee68a" : "#ff5468", 12);
         }
         break;
       }
-      case "headline": if (sig.headline.priority >= 2) fx?.edge(TONE_COLOR[sig.headline.tone] ?? "#2ff3e0"); break;
-      case "alert": setAlert(sig.headline); setSpoken(sig.headline.text); break;
+      case "headline":
+        if (sig.headline.priority >= 2) fx?.edge(TONE_COLOR[sig.headline.tone] ?? "#2ff3e0");
+        if (sig.headline.tone === "listing" && sig.headline.ticker) e.pl.spotlight = sig.headline.ticker;
+        break;
+      case "alert": setAlert(sig.headline); setSpoken(sig.headline.text); if (sig.headline.ticker) e.pl.spotlight = sig.headline.ticker; break;
       case "capture": {
         setFlash({ seq: sig.seq, ticker: sig.ticker, from: sig.from, captorName: sig.captorName });
         setSpoken(`${sig.ticker} captured by ${sig.captorName}. Listing halted at V$0.`);
+        e.pl.spotlight = sig.ticker;
         fx?.shock(e.w / 2, "#ff3d5e");
         break;
       }
@@ -516,8 +534,8 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
       <div className="vxt-rail top" aria-hidden /><div className="vxt-rail bot" aria-hidden />
       <div className={live ? "vxt-cap" : "vxt-cap off"} title={live ? "Live feed from the room server" : "Not connected to the room server"}><i aria-hidden />{live ? "LIVE" : "OFFLINE"}</div>
       {alert && (
-        <div key={alert.id} className={`vxt-alert tone-${alert.tone}`}>
-          <span className="vxt-tag"><b>{alert.label}</b></span><Parts parts={alert.parts} />
+        <div key={alert.id} ref={alertRef} className={`vxt-alert tone-${alert.tone}`}>
+          <span className="vxt-tag"><b>{alert.label}</b></span><Parts parts={alert.parts} /><SourceChip h={alert} />
         </div>
       )}
       {flash && (
@@ -549,8 +567,11 @@ function CalmTape({ feed }: { feed: TapeFeed }): ReactElement {
     <div className="vxt is-calm" role="region" aria-label="Exchange ticker: prices and the latest swarm headline (static)">
       <div className="vxt-bg" aria-hidden />
       <div className="vxt-row">
-        {tickers.map((t, i) => <div key={t} className={i % 2 ? "vxt-slot alt" : "vxt-slot"}><ListingCell ticker={t} feed={feed} calm /></div>)}
-        <div className="vxt-slot news" aria-live="polite">{latest ? <NewsCell h={latest} fresh /> : <StatCell stat={tickers.length ? "swarm" : "empty"} />}</div>
+        <div className="vxt-slot news" aria-live="polite">{latest ? <NewsCell h={latest} fresh late={false} /> : <StatCell stat={tickers.length ? "swarm" : "empty"} />}</div>
+        {/* wraps, and only the first line shows: whole cells only, never half a listing */}
+        <div className="vxt-board">
+          {tickers.map((t, i) => <div key={t} className={i % 2 ? "vxt-slot alt" : "vxt-slot"}><ListingCell ticker={t} feed={feed} calm /></div>)}
+        </div>
       </div>
       <div className="vxt-rail top" aria-hidden /><div className="vxt-rail bot" aria-hidden />
       <div className={live ? "vxt-cap" : "vxt-cap off"}><i aria-hidden />{live ? "LIVE" : "OFFLINE"}</div>

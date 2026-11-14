@@ -46,7 +46,8 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
       dirty = true;
     },
     comet(color, rail = 0, reverse = false) {
-      if (!ctx || W <= 0 || comets.length > 24) return;
+      // At most a handful per rail at once: a burst of swarm messages should read as traffic, not as fog.
+      if (!ctx || W <= 0 || comets.filter((c) => c.rail === rail).length >= 5) return;
       const u = unit();
       const len = Math.min(W * 0.34, 260 * u) * (0.75 + Math.random() * 0.5);
       // Crossing time is the same on a laptop and on a 4K wall: speed scales with the strip width.
@@ -72,7 +73,7 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
     },
     edge(color) {
       if (!ctx || W <= 0) return;
-      if (edges.length > 3) edges.shift();
+      edges.length = 0; // one glow at a time: the newest colour takes over instead of stacking up to white
       edges.push({ rgb: rgbOf(color), life: 900, max: 900 });
     },
     clear() { comets.length = 0; sparks.length = 0; shocks.length = 0; edges.length = 0; dirty = true; },
@@ -104,9 +105,9 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
         ctx.fillRect(x0, y - 6 * u, c.len, 12 * u);
         ctx.globalAlpha = 1;
         // a wide wash of light under the head, so the text it passes over picks up the colour
-        const wr = H * 2.4;
+        const wr = H * 1.7;
         const wash = ctx.createRadialGradient(c.x, y, 0, c.x, y, wr);
-        wash.addColorStop(0, `rgba(${c.rgb},0.42)`); wash.addColorStop(1, `rgba(${c.rgb},0)`);
+        wash.addColorStop(0, `rgba(${c.rgb},0.24)`); wash.addColorStop(1, `rgba(${c.rgb},0)`);
         ctx.fillStyle = wash; ctx.fillRect(c.x - wr, 0, wr * 2, H);
         // the hot head
         const hr = 13 * u;
@@ -128,8 +129,11 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
         g.addColorStop(0, `rgba(${p.rgb},0)`); g.addColorStop(1, `rgba(${p.rgb},${a.toFixed(3)})`);
         ctx.fillStyle = g;
         ctx.fillRect(Math.min(p.x, p.x - Math.sign(p.vx) * trail), p.y - p.size / 2, trail, p.size);
-        ctx.fillStyle = `rgba(255,255,255,${(a * 0.9).toFixed(3)})`;
-        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+        // round ember with a small halo
+        ctx.fillStyle = `rgba(${p.rgb},${(a * 0.4).toFixed(3)})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${(a * 0.8).toFixed(3)})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.55, 0, Math.PI * 2); ctx.fill();
       }
 
       for (let i = edges.length - 1; i >= 0; i--) {
@@ -138,9 +142,9 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
         if (g0.life <= 0) { edges.splice(i, 1); continue; }
         const k = g0.life / g0.max;                 // 1 -> 0
         const a = Math.sin(Math.min(1, (1 - k) * 4) * Math.PI / 2) * k; // quick swell, slow fade
-        const reach = 170 * u;
+        const reach = 190 * u;
         const g = ctx.createLinearGradient(W - reach, 0, W, 0);
-        g.addColorStop(0, `rgba(${g0.rgb},0)`); g.addColorStop(0.75, `rgba(${g0.rgb},${(0.42 * a).toFixed(3)})`); g.addColorStop(1, `rgba(255,255,255,${(0.75 * a).toFixed(3)})`);
+        g.addColorStop(0, `rgba(${g0.rgb},0)`); g.addColorStop(0.7, `rgba(${g0.rgb},${(0.16 * a).toFixed(3)})`); g.addColorStop(1, `rgba(${g0.rgb},${(0.55 * a).toFixed(3)})`);
         ctx.fillStyle = g; ctx.fillRect(W - reach, 0, reach, H);
       }
 

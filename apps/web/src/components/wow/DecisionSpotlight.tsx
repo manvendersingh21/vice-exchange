@@ -26,6 +26,8 @@ export interface DecisionSpotlightProps {
   dock?: "none" | "top-right" | "top-left";
   /** How long a resolved card stays, in ms. Default 6000. Hovering or focusing a card pauses the countdown. */
   dwellMs?: number;
+  /** The stack may shrink down to this factor to keep `maxCards` on stage in a short city view. Default 0.85; 1 = never shrink. */
+  minScale?: number;
   className?: string;
   style?: CSSProperties;
 }
@@ -35,8 +37,8 @@ const CARD_H_U = 11.3;
 const GAP_U = 0.55;
 const TITLE_U = 1.75;
 const CHAMFER_U = 1.05;
-const RESERVE_U = 2.7;      // kept free under the stack for the HUD chips at the bottom of the city
-const EXIT_MS = 520;
+const RESERVE_PX = 46;      // kept free under the stack for the HUD chips at the bottom of the city
+const EXIT_MS = 460;        // slot collapse in the stylesheet is 440 ms
 
 // Same role colours and silhouettes as the NPC markers in the city, so a card maps to its NPC at a glance.
 const ROLE_COLOR: Record<NpcRole, string> = { WITNESS: "#ffd166", INFORMANT: "#c77dff", TRADER: "#5dfdcb", POLICE: "#4cc9f0" };
@@ -69,8 +71,13 @@ function useReducedMotion(): boolean {
   return reduce;
 }
 
-/** How many cards fit between the top of the stack and the bottom of the nearest clipping ancestor. */
-function useFit(rootRef: RefObject<HTMLDivElement | null>, max: number): number {
+/**
+ * Fits the stack between its own top and the bottom of the nearest clipping ancestor (the city view).
+ * First it shrinks the layout unit a little (never below `minScale`) so that `max` cards fit; only when that
+ * is not enough does it show fewer cards (the rest wait in the queue). The scale is written straight to the
+ * element as --dspot-fit, so no React render is needed for it.
+ */
+function useFit(rootRef: RefObject<HTMLDivElement | null>, max: number, minScale: number): number {
   const [fit, setFit] = useState(max);
   useLayoutEffect(() => {
     const el = rootRef.current;
@@ -80,20 +87,28 @@ function useFit(rootRef: RefObject<HTMLDivElement | null>, max: number): number 
       const o = getComputedStyle(p).overflowY;
       if (o === "hidden" || o === "clip" || o === "auto" || o === "scroll") { clip = p; break; }
     }
+    const lo = Math.max(0.5, Math.min(1, minScale));
     const measure = () => {
-      const u = parseFloat(getComputedStyle(el).fontSize) || 14;
+      el.style.setProperty("--dspot-fit", "1");
+      const u = parseFloat(getComputedStyle(el).fontSize) || 14;          // the unit at full size
       const top = el.getBoundingClientRect().top;
       const bottom = Math.min(clip ? clip.getBoundingClientRect().bottom : Infinity, window.innerHeight);
-      const avail = bottom - top - (TITLE_U + RESERVE_U) * u;
-      const n = Math.floor((avail + GAP_U * u) / ((CARD_H_U + GAP_U) * u));
-      setFit(Math.max(1, Math.min(max, n)));
+      const space = bottom - top - RESERVE_PX;
+      const need = (n: number) => (TITLE_U + n * CARD_H_U + (n - 1) * GAP_U) * u;
+      let n = max, k = 1;
+      for (; n >= 1; n--) {
+        k = Math.min(1, Math.floor((space / need(n)) * 100) / 100);
+        if (k >= lo || n === 1) break;
+      }
+      el.style.setProperty("--dspot-fit", String(Math.max(lo, k)));
+      setFit(Math.max(1, n));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(clip ?? document.documentElement);
     window.addEventListener("resize", measure);
-    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
-  }, [rootRef, max]);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); el.style.removeProperty("--dspot-fit"); };
+  }, [rootRef, max, minScale]);
   return fit;
 }
 
@@ -422,7 +437,7 @@ const Card = memo(function Card({ card, selected, reduce, dwellMs, onSelect, onH
   const cls = [
     "dspot-card", `t-${v.tone}`, `r-${card.role.toLowerCase()}`,
     thinking ? "is-thinking" : "is-resolved", revealed ? "is-revealed" : "", solo ? "is-solo" : "",
-    v.stale ? "is-stale" : "", selected ? "is-selected" : "", bornResolved ? "is-late" : "",
+    v.stale ? "is-stale" : "", selected ? "is-selected" : "",
   ].filter(Boolean).join(" ");
   const style = { "--dspot-role": roleColor, "--dspot-tone": toneColor, "--dspot-ink": inkColor, "--dspot-dwell": `${dwellMs}ms` } as CSSProperties;
   const aria = v.thinking
@@ -532,11 +547,11 @@ const Card = memo(function Card({ card, selected, reduce, dwellMs, onSelect, onH
 
 // ---------- the stack ----------
 
-export default function DecisionSpotlight({ maxCards = 3, dock = "none", dwellMs = 6000, className, style }: DecisionSpotlightProps) {
+export default function DecisionSpotlight({ maxCards = 3, dock = "none", dwellMs = 6000, minScale = 0.85, className, style }: DecisionSpotlightProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
   const cap = Math.max(1, Math.min(3, Math.floor(maxCards)));
-  const fit = useFit(rootRef, cap);
+  const fit = useFit(rootRef, cap, minScale);
   const exitMs = reduce ? 0 : EXIT_MS;
 
   const deck = useMemo(() => createDeck({ capacity: cap, dwellMs, exitMs: EXIT_MS }), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -570,7 +585,7 @@ export default function DecisionSpotlight({ maxCards = 3, dock = "none", dwellMs
         <span className="dspot-title-mark" aria-hidden><i /><i /><i /></span>
         <span className="dspot-title-text">WATCH THE SWARM THINK</span>
         <span className="dspot-title-count">
-          {snap.thinking > 0 ? <b>{snap.thinking} deciding</b> : <b className="quiet">settled</b>}
+          {snap.thinking > 0 ? <b>{snap.thinking} deciding</b> : snap.queued > 0 ? null : <b className="quiet">settled</b>}
           {snap.queued > 0 ? <em>+{snap.queued} queued</em> : null}
         </span>
       </div>

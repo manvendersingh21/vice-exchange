@@ -15,7 +15,7 @@ function readLink(): { nick: string; role: HumanRole | null; room: string; auto:
   const q = new URLSearchParams(window.location.search);
   const r = (q.get("role") ?? "").toUpperCase();
   const view = (q.get("view") ?? "").toLowerCase();
-  if (view === "3d" || view === "2d") useGame.setState({ viewMode: view });
+  if (view === "3d" || view === "2d" || view === "world") useGame.setState({ viewMode: view });
   return {
     nick: (q.get("nick") ?? "").slice(0, 16), role: r === "OUTLAW" || r === "HUNTER" || r === "SPECTATOR" ? r : null,
     room: (q.get("room") ?? "").toUpperCase().slice(0, 12), auto: q.get("auto") === "1", create: q.get("create") === "1",

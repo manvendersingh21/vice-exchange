@@ -96,6 +96,7 @@ var ws: WebSocketPeer = null
 var ws_open := false
 var joined := false
 var session_token := ""
+var _web_tuned := false
 var web_embed := false         # true when running as the Web export inside the browser UI
 var my_player_id := ""
 var my_character_id := ""
@@ -264,7 +265,16 @@ func my_sim_pos() -> Vector2:
 
 
 # ---------------------------------------------------------------- main loop
+func _web_tune(node: Node) -> void:
+	# Web build only: real-time shadows are the most expensive thing the Compatibility renderer does here.
+	if node is Light3D: (node as Light3D).shadow_enabled = false
+	for c in node.get_children(): _web_tune(c)
+
+
 func _process(dt: float) -> void:
+	if web_embed and not _web_tuned and game != null and Engine.get_frames_drawn() > 20:
+		_web_tuned = true
+		_web_tune(get_tree().root)
 	if game == null:
 		var scene := get_tree().current_scene
 		if scene != null and "player_pos" in scene and "world" in scene and scene.world != null:

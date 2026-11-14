@@ -14,13 +14,13 @@ export const TL = {
   /** The HALTED plate lands. */
   stamp: 3000,
   /** Fade-out begins. */
-  out: 4300,
+  out: 4100,
   /** Unmount. */
-  end: 4750,
+  end: 4500,
 } as const;
 
 /** Chart band as fractions of the viewport (the stage CSS positions the text around these). */
-export const CHART = { x0: 0.05, x1: 0.95, yTop: 0.415, yBase: 0.8, xEdge: 0.745, xZero: 0.83 } as const;
+export const CHART = { x0: 0.05, x1: 0.95, yTop: 0.415, yBase: 0.79, xEdge: 0.745, xZero: 0.83 } as const;
 
 export interface Pt { x: number; y: number }
 export interface Box { x: number; y: number; w: number; h: number }
@@ -426,8 +426,8 @@ function drawChart(ctx: CanvasRenderingContext2D, m: FxModel, t: number): void {
     }
     ctx.fillStyle = `rgba(${PURPLE},${a})`;
     const label = `REFERENCE V$${Math.round(m.reference).toLocaleString("en-US")}`;
-    // Above the band the reference is off this chart's scale: say so rather than draw it in the wrong place.
-    ctx.fillText(inBand ? label : `${label} ▲ off scale`, m.x1, inBand ? m.refY - fs * 0.9 : m.yTop + fs * 0.5);
+    // Above the band the reference is off this chart's scale: point up rather than draw it in the wrong place.
+    ctx.fillText(inBand ? label : `${label} ▲`, m.x1, inBand ? m.refY - fs * 0.9 : m.yTop + fs * 0.5);
     ctx.textAlign = "left";
   }
   if (t <= TL.fall0) {

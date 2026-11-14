@@ -18,3 +18,4 @@ integrations/open-theft-auto/
 
 .swarm/repro/
 e2e/out/
+apps/web/public/world/

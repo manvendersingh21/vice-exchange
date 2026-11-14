@@ -35,9 +35,10 @@ export interface AmbientOptions {
   /** "low" drops the haze and searchlights and halves the water sparkle. */
   quality?: "high" | "low";
   /**
-   * Optional fixed spots the traffic must never drive over (for example where a stall or a standing figure is).
-   * Lanes and junction movements within 1.9 m of a spot are closed when the layer is created; it is plain
-   * geometry, read once, and the layer still never looks at live state.
+   * Fixed spots the traffic must never drive over (for example where a stall or a standing figure is). Lanes and
+   * junction movements within 1.6 m of a spot are closed when the layer is created; it is plain geometry, read
+   * once, and the layer still never looks at live state. Defaults to the map's known standing posts; pass []
+   * to open every lane.
    */
   keepClear?: ReadonlyArray<{ x: number; z: number }>;
 }
@@ -73,6 +74,12 @@ const SIGN_BY_ID: Record<string, { text: string; rgb: string; w: number; h: numb
   b_warehouse: { text: "FISH + ICE", rgb: "110,255,214", w: 6.8, h: 1.8, side: 0 },
 };
 const PIER_X = [38, 47, 56];           // the three piers cityArt paints into every bay
+// Where this map's six standing figures keep their posts. Static design data (the roster), not live state:
+// lanes and junction movements that would run over a post stay closed, so traffic never drives under one of
+// them. The two patrolling figures walk the road centre lines, which no lane uses.
+const POSTS_BY_MAP: Record<string, ReadonlyArray<{ x: number; z: number }>> = {
+  "Coral Bay": [{ x: 40, z: 64 }, { x: 55, z: 45 }, { x: 33, z: 52 }, { x: 62, z: 30 }, { x: 17, z: 31 }, { x: 30, z: 41 }],
+};
 const CAR_PAINT = ["#3a4072", "#632e66", "#1d6573", "#4b3b99", "#743143", "#716c90", "#2b2e44", "#86603f", "#34634f", "#a09ebb", "#b9ad92", "#44538a"];
 const SPORT_PAINT = ["#cf3b82", "#1fb9b9", "#8f52ff", "#e36b3d"];
 const PED_PAINT = ["#6f6a96", "#80607c", "#557a85", "#877660", "#617260", "#7a6f9c"];
@@ -98,7 +105,8 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
   const rand = mulberry32(seed * 7919 + 17);
   const high = options.quality !== "low";
   let reduced = options.reducedMotion ?? (typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-  const traffic = createTraffic(map, seed, options.cars ?? 26, options.keepClear ?? []);
+  const posts = options.keepClear ?? POSTS_BY_MAP[map.name] ?? [];
+  const traffic = createTraffic(map, seed, options.cars ?? 26, posts);
   const land = traffic.land;
   const W = map.width, H = map.height;
   let t = 0;                       // scenery clock in seconds
@@ -214,9 +222,11 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
   const ped = new Float32Array(pedTmp);
 
   // ---------------------------------------------------------------- kerbside parked cars on the dead-end stubs by the water
+  // Only for maps that define no solid parked cars of their own: where the shared map has real ones (they block
+  // players and NPCs), a decorative look-alike that can be walked through would be a lie.
   const parkTmp: number[] = [];
-  const keepClear: Array<{ x: number; z: number }> = [...MISSION_SPOTS, ...SPAWN_POINTS.OUTLAW, ...SPAWN_POINTS.HUNTER, ...(options.keepClear ?? [])];
-  if (traffic.zs.length) {
+  const keepClear: Array<{ x: number; z: number }> = [...MISSION_SPOTS, ...SPAWN_POINTS.OUTLAW, ...SPAWN_POINTS.HUNTER, ...posts];
+  if (traffic.zs.length && !(map.cars && map.cars.length)) {
     const j = traffic.zs.length - 1, zTop = traffic.zs[j]! + traffic.zPos[j]! + 3.6;
     for (let i = 0; i < traffic.xs.length; i++) for (let side = -1; side <= 1; side += 2) {
       const cx = traffic.xs[i]!;
@@ -547,8 +557,8 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       const c = Math.cos(A[a]!), s = Math.sin(A[a]!), hl = traffic.halfLen[a]!, hw = traffic.halfWid[a]!, kind = traffic.kind[a]!;
       ctx.save(); ctx.transform(c, s, -s, c, x, z);
       if (kind === KIND_SPORT) { ctx.globalAlpha = 0.62; ctx.drawImage(sportGlow[traffic.style[a]! % 4]!, -hl - 1.5, -hw - 1.5, hl * 2 + 3, hw * 2 + 3); }
-      if (kind === KIND_SCOOTER) { ctx.globalAlpha = 0.5; ctx.drawImage(beamWarm, hl - 0.3, -2.1, 9.5, 4.2); }
-      else { ctx.globalAlpha = 0.62; ctx.drawImage(beamWarm, hl - 0.5, -3.7, 13.5, 7.4); }
+      if (kind === KIND_SCOOTER) { ctx.globalAlpha = 0.42; ctx.drawImage(beamWarm, hl - 0.3, -2.1, 9.5, 4.2); }
+      else { ctx.globalAlpha = 0.5; ctx.drawImage(beamWarm, hl - 0.5, -3.7, 13.5, 7.4); }
       ctx.restore();
     }
     ctx.restore();
@@ -797,7 +807,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       for (let k = 0; k < 2; k++) {
         const a = (k ? 0.5 : -2.4) + (reduced ? 0 : 0.85 * Math.sin(t * (k ? 0.23 : 0.17) + k * 2));
         ctx.save(); ctx.translate(sky.x + (k ? 5.5 : -5.5), sky.z); ctx.rotate(a);
-        ctx.globalAlpha = 0.62; ctx.drawImage(beamSky[k]!, 0, -1.25, 30, 2.5);
+        ctx.globalAlpha = 0.34; ctx.drawImage(beamSky[k]!, 0, -1.2, 24, 2.4);
         ctx.restore();
         ctx.globalAlpha = 0.9; ctx.drawImage(glowSoft, sky.x + (k ? 5.5 : -5.5) - 0.8, sky.z - 0.8, 1.6, 1.6);
       }
@@ -820,16 +830,21 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       if (x < vx0 - 2 || x > vx1 + 2 || z < vz0 - 2 || z > vz1 + 2) continue;
       const hx = -Math.sin(a) * gull[o + 2]! * w, hz = Math.cos(a) * gull[o + 3]! * w, hl = Math.hypot(hx, hz) || 1;
       const dx = hx / hl, dz = hz / hl, flap = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 5.5 + i * 1.9);
-      const span = 0.78 + 0.2 * flap, back = 0.1 + 0.34 * flap, cf = 0.26, cs = span * 0.42;
+      const span = 0.66 + 0.12 * flap, tip = -0.14 - 0.24 * flap;
       for (let pass = 0; pass < 2; pass++) {
+        // seen from above: a small swept-wing silhouette, with its shadow on the ground below
         const px = pass ? x : x + 1.1, pz = pass ? z : z + 1.3;
-        ctx.strokeStyle = pass ? "#f4f8ff" : "#000000"; ctx.globalAlpha = pass ? 0.95 : 0.22; ctx.lineWidth = pass ? 0.17 : 0.22;
-        // two arched wings meeting at the body
+        ctx.fillStyle = pass ? "#f4f8ff" : "#000000"; ctx.globalAlpha = pass ? 0.95 : 0.2;
         ctx.beginPath();
-        ctx.moveTo(px - dx * back - dz * span, pz - dz * back + dx * span);
-        ctx.quadraticCurveTo(px + dx * cf - dz * cs, pz + dz * cf + dx * cs, px, pz);
-        ctx.quadraticCurveTo(px + dx * cf + dz * cs, pz + dz * cf - dx * cs, px - dx * back + dz * span, pz - dz * back - dx * span);
-        ctx.stroke();
+        ctx.moveTo(px + dx * 0.32, pz + dz * 0.32);
+        ctx.lineTo(px + dx * 0.1 - dz * span * 0.38, pz + dz * 0.1 + dx * span * 0.38);
+        ctx.lineTo(px + dx * tip - dz * span, pz + dz * tip + dx * span);
+        ctx.lineTo(px - dx * 0.07 - dz * span * 0.3, pz - dz * 0.07 + dx * span * 0.3);
+        ctx.lineTo(px - dx * 0.36, pz - dz * 0.36);
+        ctx.lineTo(px - dx * 0.07 + dz * span * 0.3, pz - dz * 0.07 - dx * span * 0.3);
+        ctx.lineTo(px + dx * tip + dz * span, pz + dz * tip - dx * span);
+        ctx.lineTo(px + dx * 0.1 + dz * span * 0.38, pz + dz * 0.1 - dx * span * 0.38);
+        ctx.closePath(); ctx.fill();
       }
     }
     ctx.restore();

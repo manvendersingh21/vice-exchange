@@ -74,12 +74,26 @@ export function isSnapshotUpdate(next: WorldRefs, prev: WorldRefs): boolean {
   return next.characters !== prev.characters && next.npcs !== prev.npcs && next.missions !== prev.missions && next.listings !== prev.listings;
 }
 
+/** Newest rule-clock time in a log (0 for an empty one). */
+export function newestSimTime(events: readonly GameEvent[]): number {
+  let max = 0;
+  for (const e of events) if (e.simTimeMs > max) max = e.simTimeMs;
+  return max;
+}
+
 /**
- * Second guard, in the server's own clock so client clock skew cannot matter: an event whose rule-clock time
- * is far behind the latest server time we know about is history, however it reached us.
+ * Second guard against replaying history, entirely in the server's rule clock (client clock skew cannot matter).
+ * An event is stale when
+ *  - the log already holds events more than `maxAgeMs` newer than it (a live event is the newest thing in the
+ *    log the moment it arrives), or
+ *  - the latest server time known from world ticks is more than `maxAgeMs` past it. This second test is only
+ *    used when that tick clock is evidently the same clock as the log (within a minute of its newest event),
+ *    so a clock mismatch can never silence a live capture.
  * Unknown clocks (0 / NaN, as in bare mocks) never count as stale.
  */
-export function isStaleEvent(event: Pick<GameEvent, "simTimeMs">, serverNowMs: number, maxAgeMs = 10_000): boolean {
-  if (!(serverNowMs > 0) || !(event.simTimeMs > 0)) return false;
-  return serverNowMs - event.simTimeMs > maxAgeMs;
+export function isStaleEvent(event: Pick<GameEvent, "simTimeMs">, newestSimTimeMs: number, serverNowMs: number, maxAgeMs = 10_000): boolean {
+  if (!(event.simTimeMs > 0)) return false;
+  if (newestSimTimeMs > 0 && newestSimTimeMs - event.simTimeMs > maxAgeMs) return true;
+  const sameClock = serverNowMs > 0 && newestSimTimeMs > 0 && Math.abs(serverNowMs - newestSimTimeMs) < 60_000;
+  return sameClock && serverNowMs - event.simTimeMs > maxAgeMs;
 }

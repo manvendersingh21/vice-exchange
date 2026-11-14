@@ -46,3 +46,21 @@ Verification commands: add `--vice-check` (headless ok), `--vice-hunt`, `--vice-
 - A bridge client that created a private room loses it when the watch-mode server restarts (it then creates a new one).
 - About 40 fps at 1280x720 while recording on this Mac with the neon look and background life.
 - Frames and clip: `integrations/ota-bridge/frames/`.
+
+## GODOT handoff (a0e7dbb5b6c9ab618, 13:26)
+- Clip: `integrations/ota-bridge/frames/vice_exchange_3d_full_chain.mp4`, 45 s, 1280x720, real-time capture of one live
+  Drex-mode run: flyover, buy 1 share, job, witness REPORT [DREX 0.97], bulletin ring, price 175 -> 136 on the HUD,
+  PURSUE [DREX 0.96], capture by Sgt. Imani Duarte, V$0 banner, respawn as ACE-02. Re-record with
+  `--vice-check --vice-record=<dir> --vice-size=1280x720 --vice-room=NEW --vice-wait=5 --vice-linger=85`, then
+  `ffmpeg -f concat -safe 0 -i <dir>/frames.txt -vf fps=24,format=yuv420p -c:v libx264 -crf 26 out.mp4`.
+- Frames 20 to 27 in the same folder show the effects: side-on message arc + bulletin ring + police strobes (scripted
+  room, badge says SCRIPTED), DREX decision popup, WANTED price drop, job prompt, pursuit two-shot, V$0 banner.
+- Last end-to-end check of the script as it is on disk now: 13:25, headless, private room on port 3001: join, buy,
+  job, wanted all confirmed, 0 pose rejections.
+- Not verified: a human playing with WASD and mouse (checks move the player by script; E, R, ] go through the real
+  key path); decision popups for `fallback` and `meta` sources (only drex, guardrail and scripted were seen);
+  the Web export / browser embed added to `vice_bridge.gd` and `apply.py` by another contributor.
+- Known limits: the message arc is often partly hidden by buildings or the HUD strip from the chase camera; a private
+  room does not survive a server restart (the client makes a new one); about 40 fps while recording at 1280x720.
+- `vice_bridge.gd` was edited by two contributors at once after 13:05 and broke twice from merged edits; before the
+  demo run `godot --headless --path integrations/open-theft-auto --quit` and check for "Parse Error".

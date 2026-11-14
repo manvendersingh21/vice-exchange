@@ -45,12 +45,17 @@ export type TapeSignal =
   | { type: "capture"; ticker: string; captorName: string; from: number; bounty: number; seq: number }
   | { type: "reset" };
 
-export interface NewsItem { h: Headline; fresh: boolean }
+/** fresh = first showing. late = first showing, but the event is already several seconds old (the tape was busy). */
+export interface NewsItem { h: Headline; fresh: boolean; late: boolean }
 
 const RING_MAX = 6;
-const FRESH_MAX = 8;
+const FRESH_MAX = 10;
+/** A story beat that could not get a slot for this long is no longer news: it becomes a recap. */
+const EXPIRE_MS = 45000;
 const RECAP_MAX_SHOWS = 3;
 const RECAP_GAP_MS = 16000;
+/** A headline that waited this long for its slot is shown with its clock time. */
+const LATE_MS = 9000;
 /** Events older than this inside one batch are a backlog (resync), not live news: no one-shot effects. */
 const STALE_MS = 20000;
 
@@ -125,7 +130,7 @@ export function headlineFor(e: GameEvent, s: GameState, ctx: Ctx): Headline | nu
         case "INFORMANT:withhold": label = "WITHHELD"; break;
         case "TRADER:hold": label = "HOLD"; break;
         case "TRADER:buy": case "TRADER:sell": label = "ORDER"; break;
-        case "POLICE:investigate": tone = "police"; label = "POLICE"; priority = 2; break;
+        case "POLICE:investigate": tone = "police"; label = "POLICE"; break;
         case "POLICE:pursue": tone = "wanted"; label = "PURSUIT"; priority = 3; break;
         case "POLICE:patrol": label = "PATROL"; break;
         default: break;
@@ -179,8 +184,8 @@ export function headlineFor(e: GameEvent, s: GameState, ctx: Ctx): Headline | nu
       const parts = rich(String(p.description || "Incident").trim().replace(/\.$/, ""), s);
       parts.push(t(" · seen by "));
       if (seen.length === 0) parts.push(t("nobody"));
-      else if (seen.length <= 2) seen.forEach((id, i) => { if (i) parts.push(t(" and ")); parts.push(nm(who(id))); });
-      else parts.push(t(`${seen.length} NPCs`));
+      else if (seen.length === 1) parts.push(nm(who(seen[0])));
+      else parts.push(nm(`${seen.length} NPCs`));
       return make(e, "job", p.kind === "MISSION" ? "JOB" : "SIGHTING", 2, parts, { ticker: p.ticker });
     }
     case "LISTING_OPENED": {
@@ -213,15 +218,17 @@ export function headlineFor(e: GameEvent, s: GameState, ctx: Ctx): Headline | nu
 }
 
 interface RingEntry { h: Headline; shows: number; lastShownAt: number }
+interface Queued { h: Headline; at: number; alerted: boolean }
 
 /** Follows the store's event log by serverSequence. Events present at start() never fire one-shot signals. */
 export class TapeFeed {
   private lastSeq = Number.NEGATIVE_INFINITY;
   private runId = "";
   private roomCode = "";
-  private fresh: Headline[] = [];
+  private fresh: Queued[] = [];
   private ring: RingEntry[] = [];
   private latestHeadline: Headline | null = null;
+  private latestBeat: Headline | null = null;
   private readonly ctx: Ctx = { decisions: new Map(), tradeCauses: new Set() };
   private readonly subs = new Set<(s: TapeSignal) => void>();
   private unsub: (() => void) | null = null;
@@ -244,14 +251,14 @@ export class TapeFeed {
   /** Everything already in the log is history: it can be recapped as a headline but never replays an effect. */
   private seed(s: GameState): void {
     this.runId = s.runId; this.roomCode = s.roomCode;
-    this.fresh = []; this.ring = []; this.latestHeadline = null; this.ctx.decisions.clear(); this.ctx.tradeCauses.clear();
+    this.fresh = []; this.ring = []; this.latestHeadline = null; this.latestBeat = null; this.ctx.decisions.clear(); this.ctx.tradeCauses.clear();
     let max = Number.NEGATIVE_INFINITY;
     for (const e of s.events) {
       if (e.serverSequence > max) max = e.serverSequence;
       if (e.runId !== s.runId) continue;
       this.remember(e);
       const h = headlineFor(e, s, this.ctx);
-      if (h) { this.latestHeadline = h; if (h.priority >= 2) this.pushRing(h, 0); }
+      if (h) { this.latestHeadline = h; if (h.priority >= 2) { this.latestBeat = h; this.pushRing(h, 0); } }
     }
     this.lastSeq = max;
   }
@@ -275,7 +282,7 @@ export class TapeFeed {
     if (s.roomCode !== this.roomCode) { this.seed(s); this.emit({ type: "reset" }); return; }
     if (s.runId !== this.runId) {
       // Seeded reset: cut the old story. serverSequence keeps growing across resets, so the cursor stays valid.
-      this.runId = s.runId; this.fresh = []; this.ring = []; this.latestHeadline = null; this.ctx.decisions.clear(); this.ctx.tradeCauses.clear();
+      this.runId = s.runId; this.fresh = []; this.ring = []; this.latestHeadline = null; this.latestBeat = null; this.ctx.decisions.clear(); this.ctx.tradeCauses.clear();
       this.emit({ type: "reset" });
     }
     const evs = s.events;
@@ -297,18 +304,24 @@ export class TapeFeed {
     const h = headlineFor(e, s, this.ctx);
     if (h) {
       this.latestHeadline = h;
+      if (h.priority >= 2) this.latestBeat = h;
       if (!live) { if (h.priority >= 2) this.pushRing(h, 0); }
       else {
-        this.fresh.push(h);
-        // Backlog: minor items give way first, then the oldest story beat. Breaking news is never dropped.
+        const alerted = h.priority === 3 && h.tone !== "capture";
+        const item: Queued = { h, at: Date.now(), alerted };
+        // The tape tells the story in the order it happened. Only a capture jumps the queue: it ends the story.
+        if (h.tone === "capture") this.fresh.unshift(item); else this.fresh.push(item);
+        // Backlog: minor items give way first, then items already shown in full as an alert, then the oldest
+        // story beat. Everything but the minor items stays available as a recap.
         while (this.fresh.length > FRESH_MAX) {
-          let k = this.fresh.findIndex((x) => x.priority === 1);
-          if (k < 0) k = this.fresh.findIndex((x) => x.priority === 2);
-          const [gone] = this.fresh.splice(k < 0 ? 0 : k, 1);
-          if (gone && gone.priority >= 2) this.pushRing(gone, 0);
+          let k = this.fresh.findIndex((x) => x.h.priority === 1);
+          if (k < 0) k = this.fresh.findIndex((x) => x.alerted);
+          if (k < 0) k = this.fresh.findIndex((x) => x.h.tone !== "capture");
+          const [gone] = this.fresh.splice(k < 0 ? this.fresh.length - 1 : k, 1);
+          if (gone && gone.h.priority >= 2) this.pushRing(gone.h, 0);
         }
         this.emit({ type: "headline", headline: h });
-        if (h.priority === 3 && h.tone !== "capture") this.emit({ type: "alert", headline: h });
+        if (alerted) this.emit({ type: "alert", headline: h });
       }
     }
     if (!live) return;
@@ -331,18 +344,24 @@ export class TapeFeed {
     }
   }
 
-  /** Priority of the next unseen headline (0 when the queue is empty). */
-  peekPriority(): number { return this.fresh[0]?.priority ?? 0; }
+  /** True when the next unseen headline is a capture (it takes the very next slot on the belt). */
+  hasBreaking(): boolean { return this.fresh[0]?.h.tone === "capture"; }
   backlog(): number { return this.fresh.length; }
-  latest(): Headline | null { return this.latestHeadline; }
+  /** Most recent story beat (falls back to the most recent headline of any weight). Used by the static strip. */
+  latest(): Headline | null { return this.latestBeat ?? this.latestHeadline; }
 
-  /** Next unseen headline, in causal (sequence) order. Minor items are skipped while there is a backlog. */
+  /** Next unseen headline, in causal (sequence) order. While the tape is behind, minor items and items that were
+   *  already shown in full as an alert step aside; story beats are never skipped here. */
   takeFresh(): NewsItem | null {
-    while (this.fresh.length > 3 && this.fresh[0]!.priority === 1) this.fresh.shift();
-    const h = this.fresh.shift();
-    if (!h) return null;
-    if (h.priority >= 2) this.pushRing(h, 1);
-    return { h, fresh: true };
+    for (;;) {
+      const q = this.fresh.shift();
+      if (!q) return null;
+      const behind = this.fresh.length, waited = Date.now() - q.at;
+      const stepAside = (behind >= 2 && (q.h.priority === 1 || q.alerted)) || (behind >= 1 && waited > EXPIRE_MS && q.h.tone !== "capture");
+      if (stepAside) { if (q.h.priority >= 2) this.pushRing(q.h, 0); continue; }
+      if (q.h.priority >= 2) this.pushRing(q.h, 1);
+      return { h: q.h, fresh: true, late: waited > LATE_MS };
+    }
   }
 
   /** A recent story beat to show again (clearly marked as earlier news by the cell). */
@@ -356,6 +375,6 @@ export class TapeFeed {
     }
     if (!best) return null;
     best.shows++; best.lastShownAt = now;
-    return { h: best.h, fresh: false };
+    return { h: best.h, fresh: false, late: false };
   }
 }

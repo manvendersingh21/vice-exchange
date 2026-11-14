@@ -1,11 +1,13 @@
 // Dev-only harness for CrashCinematic: no server, the real zustand store fed with a busy mock room.
 // Open /src/components/wow/CrashCinematic.preview.html with any of:
-//   t=<ms>      hold the cinematic at this timeline time (deterministic screenshots)
-//   calm=1      force the reduced-motion variant          captor=human   a human hunter makes the capture
+//   (nothing)   the real <App /> on the mock room; the app's own <CrashCinematic /> plays the live capture
+//   t=<ms>      hold the cinematic at this timeline time (deterministic screenshots; implies bare)
+//   calm=1      force the reduced-motion variant (implies bare)   captor=human   a human hunter makes the capture
 //   double=1    two captures land in the same burst (queue)
 //   old=1       the capture is already in the join snapshot: nothing may play
 //   resync=1    a capture arrives inside a resync snapshot: nothing may play; a later live one must
-//   bare=1      no app behind the overlay                  at=<ms>  delay before the live burst
+//   bare=1      no app behind: this page mounts the component itself       at=<ms>  delay before the live burst
+//   own=1       mount the component here even with the app behind (only if the app stops mounting it)
 import { StrictMode, useEffect, useState } from "react";
 import type { ComponentType, ReactElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -25,8 +27,12 @@ const HUMAN = q.get("captor") === "human";
 const DOUBLE = q.has("double");
 const OLD = q.has("old");
 const RESYNC = q.has("resync");
-const BARE = q.has("bare");
+// The app mounts <CrashCinematic /> itself, so with the app behind this page must not mount a second one.
+const BARE = q.has("bare") || FREEZE != null || CALM != null;
+const OWN = BARE || q.has("own");
 const AT = q.has("at") ? Number(q.get("at")) : FREEZE != null ? 60 : 2600;
+/** rich=3 multiplies every price, to preview four-digit readouts ("V$1,293"). */
+const RICH = q.has("rich") ? Math.max(0.01, Number(q.get("rich")) || 1) : 1;
 
 const RUN = "run_demo_42", ROOM = "VICE-42";
 const T0 = 1_000_000; // rule clock at room start
@@ -43,7 +49,7 @@ function simulate(lifeSec: number, missions: number[], reports: number[], trades
     if (reports.includes(s)) { heat = Math.min(100, heat + 30); quiet = 0; changed = true; }
     else if (++quiet > 6 && heat > 0 && s < lifeSec - 45) { heat = Math.max(0, heat - 1); changed = changed || s % 2 === 0; }
     for (const [at, d] of trades) if (at === s) { net += d; changed = true; }
-    reference = 100 + 15 * notoriety + 60 * done + 2 * Math.floor(s / 5);
+    reference = Math.round((100 + 15 * notoriety + 60 * done + 2 * Math.floor(s / 5)) * RICH);
     spot = Math.max(1, Math.round(reference * clamp(0.95 - 0.007 * heat, 0.15, 0.98) * clamp(1 + 0.03 * net, 0.75, 1.25)));
     if (changed || s % 5 === 0) history.push({ t: T0 + s * 1000, spot, reference });
   }
@@ -283,6 +289,7 @@ function tick(): void {
 
 function Preview(): ReactElement {
   const [App, setApp] = useState<ComponentType | null>(null);
+  const [appFailed, setAppFailed] = useState(false);
   const [, bump] = useState(0);
   useEffect(() => {
     const on = (): void => bump((n) => n + 1);
@@ -292,7 +299,7 @@ function Preview(): ReactElement {
   useEffect(() => {
     if (BARE) return;
     let live = true;
-    import("../../App").then((m) => { if (live) setApp(() => m.App); }).catch((err: unknown) => note(`App backdrop unavailable: ${String(err)}`));
+    import("../../App").then((m) => { if (live) setApp(() => m.App); }).catch((err: unknown) => { if (live) setAppFailed(true); note(`App backdrop unavailable: ${String(err)}`); });
     return () => { live = false; };
   }, []);
   useEffect(() => {
@@ -323,7 +330,7 @@ function Preview(): ReactElement {
   return (
     <>
       {App ? <App /> : <div style={{ height: "100%", background: "radial-gradient(900px 500px at 50% 0%, #2a1650 0%, #0b0c16 70%)" }} />}
-      <CrashCinematic freezeAtMs={FREEZE} reducedMotion={CALM} />
+      {(OWN || appFailed) && <CrashCinematic freezeAtMs={FREEZE} reducedMotion={CALM} />}
       <pre data-preview-log style={{ position: "fixed", left: 8, bottom: 8, zIndex: 8000, margin: 0, padding: "6px 10px", font: "12px ui-monospace, Menlo, monospace", color: "#9ff", background: "rgba(0,0,0,.72)", borderRadius: 6, pointerEvents: "none", maxWidth: "46vw", whiteSpace: "pre-wrap" }}>
         {`CrashCinematic preview · events ${store().events.length} · overlay ${document.querySelector(".cc-root") ? "ON" : "off"}\n${log.join("\n")}`}
       </pre>

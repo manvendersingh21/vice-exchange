@@ -1,9 +1,11 @@
 /* Crash cinematic. Every moving property is written by JavaScript from one timeline clock, so nothing here
    uses CSS animations or transitions (the app disables those under prefers-reduced-motion anyway).
-   Sizes are viewport-relative: the layout holds from 1280 px to 4K without reflow. */
+   Sizes hang off --cc-u, 1% of the width of the largest 16:9 frame that fits the viewport, so the layout
+   holds from 1280 px to 4K and on ultra-wide or 4:3 screens without reflow. */
 .cc-root {
   --cc-bad: var(--bad, #ff5468); --cc-pink: var(--pink, #ff4fa3); --cc-aqua: var(--aqua, #2ff3e0);
   --cc-purple: var(--purple, #a56bff); --cc-warn: var(--warn, #ffb347);
+  --cc-u: min(1vw, 1.778vh);
   --cc-tape: clamp(30px, 5.2vh, 112px);
   position: fixed; inset: 0; z-index: 9000; overflow: hidden; contain: strict; isolation: isolate;
   opacity: 0; color: #fff; cursor: pointer; user-select: none; -webkit-user-select: none;
@@ -44,7 +46,7 @@
 /* ---- kicker ---- */
 .cc-kicker {
   position: absolute; left: 0; right: 0; top: 8.3%; display: flex; justify-content: center; align-items: center; gap: 1.1em;
-  font-size: clamp(16px, 1.7vw, 62px); font-weight: 900; letter-spacing: .32em; text-transform: uppercase; white-space: nowrap;
+  font-size: clamp(16px, calc(var(--cc-u) * 1.7), 62px); font-weight: 900; letter-spacing: .32em; text-transform: uppercase; white-space: nowrap;
 }
 .cc-kicker b { background: var(--cc-bad); color: #19020a; padding: .2em .55em .2em .85em; box-shadow: 0 0 1.4em rgba(255, 84, 104, .7); }
 .cc-kicker span { color: #fff; text-shadow: 0 0 .7em rgba(255, 79, 163, .9); }
@@ -73,19 +75,17 @@
   --cc-c: 0;
   position: relative; display: block; white-space: nowrap; text-align: center; line-height: 1; will-change: transform, opacity;
   font-weight: 900; font-variant-numeric: tabular-nums lining-nums;
-  font-size: min(10.5vw, 16vh); padding: .25em .3em .08em; min-width: calc(var(--cc-chars) * .66em + .8em);
+  /* the last term keeps very long prices from growing over the cliff on the right */
+  font-size: min(10.5vw, 16vh, calc(64vw / (var(--cc-chars) * .66 + .8))); padding: .25em .3em .08em; min-width: calc(var(--cc-chars) * .66em + .8em);
   background: linear-gradient(180deg, rgba(9, 2, 8, .76), rgba(26, 3, 13, .68));
   -webkit-backdrop-filter: blur(.045em) saturate(1.25); backdrop-filter: blur(.045em) saturate(1.25);
   border: max(2px, .02em) solid rgba(255, 84, 104, .6); border-radius: .07em;
   box-shadow: 0 0 0 max(1px, .01em) rgba(0, 0, 0, .7), 0 0 1em rgba(255, 84, 104, .38), inset 0 0 .8em rgba(255, 84, 104, .2);
   text-shadow: calc(var(--cc-c) * 1em) 0 0 rgba(255, 79, 163, .9), calc(var(--cc-c) * -1em) 0 0 rgba(47, 243, 224, .9), 0 0 .3em rgba(255, 84, 104, .6);
 }
-.cc-readout-k {
-  position: absolute; left: .7em; top: .55em; font-family: "Inter", ui-sans-serif, system-ui, sans-serif; font-size: .105em; font-weight: 800;
-  letter-spacing: .3em; color: #ffb9c6; text-shadow: none;
-}
+.cc-readout-k { position: absolute; left: .7em; top: .55em; font-size: .105em; font-weight: 800; letter-spacing: .3em; color: #ffb9c6; text-shadow: none; }
 .cc-readout-pct {
-  position: absolute; right: .55em; top: .34em; font-size: .14em; font-weight: 800; letter-spacing: .04em; color: #ff5468;
+  position: absolute; right: .55em; top: .3em; font-size: .15em; font-weight: 900; letter-spacing: .04em; color: #ff5468;
   text-shadow: 0 0 .7em rgba(255, 84, 104, .85);
 }
 /* Fixed-width digit cells: the number never reflows while it falls. "V$" and separators keep their own width. */
@@ -96,16 +96,16 @@
 .cc-readout-fx.is-zero .cc-cell { color: #ff5468; text-shadow: 0 0 .12em #fff, 0 0 .5em rgba(255, 84, 104, .95); }
 
 /* ---- caption row ---- */
-.cc-caption { position: absolute; left: 5%; right: 5%; top: 81.3%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 1.3vw; }
+.cc-caption { position: absolute; left: 5%; right: 5%; top: 80.4%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: calc(var(--cc-u) * 1.3); }
 .cc-caption.has-captor { grid-template-columns: minmax(0, 1.7fr); }
 .cc-stat {
-  min-width: 0; padding: .45vh .6vw .45vh 1vw; border-left: max(3px, .24vw) solid var(--cc-bad); will-change: transform, opacity;
+  min-width: 0; padding: .4vh calc(var(--cc-u) * .6) .4vh calc(var(--cc-u) * 1); border-left: max(3px, calc(var(--cc-u) * .24)) solid var(--cc-bad); will-change: transform, opacity;
   background: linear-gradient(90deg, rgba(255, 84, 104, .22), rgba(255, 84, 104, 0) 85%), rgba(20, 3, 12, .92);
 }
-.cc-stat-k { font-size: clamp(14px, 1.06vw, 40px); font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: #ffb9c6; white-space: nowrap; }
-.cc-stat-v { font-size: clamp(26px, 2.55vw, 96px); font-weight: 900; line-height: 1.14; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; text-shadow: 0 0 .5em rgba(255, 84, 104, .45); }
-.cc-stat-v.long { font-size: clamp(21px, 2.02vw, 78px); line-height: 1.44; }
-.cc-stat-s { font-size: clamp(13px, .98vw, 36px); font-weight: 700; letter-spacing: .1em; color: #e9c6d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-stat-k { font-size: clamp(14px, calc(var(--cc-u) * 1.06), 40px); font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: #ffb9c6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-stat-v { font-size: clamp(26px, calc(var(--cc-u) * 2.55), 96px); font-weight: 900; line-height: 1.14; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; text-shadow: 0 0 .5em rgba(255, 84, 104, .45); }
+.cc-stat-v.long { font-size: clamp(21px, calc(var(--cc-u) * 2.02), 78px); line-height: 1.44; }
+.cc-stat-s { font-size: clamp(13px, calc(var(--cc-u) * .98), 36px); font-weight: 700; letter-spacing: .1em; color: #e9c6d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-chip { display: inline-block; padding: .08em .6em; border: max(1px, .1em) solid; border-radius: 999px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; }
 .cc-chip.npc { color: var(--cc-aqua); border-color: var(--cc-aqua); background: rgba(47, 243, 224, .1); }
 .cc-chip.human { color: var(--cc-pink); border-color: var(--cc-pink); background: rgba(255, 79, 163, .12); }
@@ -114,17 +114,17 @@
 .cc-plate-slot { position: absolute; left: 50%; top: 55.2%; transform: translate(-50%, -50%); }
 .cc-plate {
   opacity: 0; transform-origin: 50% 50%; will-change: transform, opacity; text-align: center; white-space: nowrap; color: #ff6a7c;
-  padding: min(1.5vw, 2.6vh) min(3.2vw, 5.6vh) min(1.3vw, 2.3vh);
-  border: min(.62vw, 1.1vh) solid var(--cc-bad); border-radius: min(.7vw, 1.2vh);
-  outline: min(.18vw, .32vh) solid var(--cc-bad); outline-offset: min(.5vw, .9vh);
+  padding: calc(var(--cc-u) * 1.5) calc(var(--cc-u) * 3.2) calc(var(--cc-u) * 1.3);
+  border: calc(var(--cc-u) * .62) solid var(--cc-bad); border-radius: calc(var(--cc-u) * .7);
+  outline: calc(var(--cc-u) * .18) solid var(--cc-bad); outline-offset: calc(var(--cc-u) * .5);
   background:
     repeating-linear-gradient(-28deg, rgba(255, 84, 104, 0) 0 1.1vh, rgba(255, 84, 104, .06) 1.1vh 1.3vh),
     linear-gradient(180deg, rgba(30, 3, 12, .95), rgba(16, 2, 8, .95));
-  box-shadow: 0 0 6vw rgba(255, 84, 104, .5), 0 1.2vh 4vh rgba(0, 0, 0, .7), inset 0 0 3vw rgba(255, 84, 104, .22);
+  box-shadow: 0 0 calc(var(--cc-u) * 6) rgba(255, 84, 104, .5), 0 1.2vh 4vh rgba(0, 0, 0, .7), inset 0 0 calc(var(--cc-u) * 3) rgba(255, 84, 104, .22);
 }
-.cc-plate-top, .cc-plate-bot { font-size: clamp(14px, min(1.3vw, 2.3vh), 50px); font-weight: 800; letter-spacing: .44em; padding-left: .44em; color: #ffa3b1; text-transform: uppercase; }
+.cc-plate-top, .cc-plate-bot { font-size: clamp(14px, calc(var(--cc-u) * 1.3), 50px); font-weight: 800; letter-spacing: .44em; padding-left: .44em; color: #ffa3b1; text-transform: uppercase; }
 .cc-plate-main {
-  font-size: min(8.4vw, 15vh); font-weight: 900; font-style: italic; line-height: 1.08; letter-spacing: .01em; color: #ff6679;
+  font-size: calc(var(--cc-u) * 8.4); font-weight: 900; font-style: italic; line-height: 1.08; letter-spacing: .01em; color: #ff6679;
   text-shadow: 0 0 .22em rgba(255, 84, 104, .75), 0 0 .7em rgba(255, 84, 104, .45);
 }
 .cc-plate-main em { font-style: normal; opacity: .75; padding: 0 .1em; }
@@ -132,13 +132,14 @@
 /* ---- footer, queue chip, overlays ---- */
 .cc-foot {
   position: absolute; left: 5%; right: 5%; bottom: calc(var(--cc-tape) + .3vh); display: flex; justify-content: space-between; gap: 2vw;
-  font-size: clamp(12px, .82vw, 30px); letter-spacing: .08em; color: rgba(255, 214, 224, .72); white-space: nowrap;
+  font-size: clamp(12px, calc(var(--cc-u) * .82), 30px); letter-spacing: .08em; color: rgba(255, 214, 224, .72); white-space: nowrap;
 }
 .cc-more {
   position: absolute; right: 5%; top: calc(var(--cc-tape) + 2.2vh); padding: .3em .8em; border: max(1px, .1em) solid var(--cc-warn); border-radius: 999px;
-  color: var(--cc-warn); background: rgba(255, 179, 71, .1); font-size: clamp(13px, 1vw, 36px); font-weight: 900; letter-spacing: .18em;
+  color: var(--cc-warn); background: rgba(255, 179, 71, .1); font-size: clamp(13px, calc(var(--cc-u) * 1), 36px); font-weight: 900; letter-spacing: .18em;
 }
-.cc-scan { position: absolute; inset: 0; pointer-events: none; opacity: .55; mix-blend-mode: multiply; background: repeating-linear-gradient(180deg, rgba(0, 0, 0, 0) 0 .2vh, rgba(0, 0, 0, .2) .2vh .4vh); }
+/* translucent black lines: same look as a multiply blend, without the extra full-screen blend pass */
+.cc-scan { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(180deg, rgba(0, 0, 0, 0) 0 .2vh, rgba(0, 0, 0, .12) .2vh .4vh); }
 .cc-vig { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(125% 105% at 50% 50%, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, .62) 100%); }
 .cc-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; will-change: opacity; }
 .cc-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

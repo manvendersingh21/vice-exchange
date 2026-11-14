@@ -12,7 +12,6 @@ export const KIND_SEDAN = 0, KIND_VAN = 1, KIND_SCOOTER = 2, KIND_SPORT = 3;
 const PAD = 2;                       // pavement ring cityArt draws around every building
 const BOX = 1.6;                     // stop line distance beyond the cross street's kerb
 const ACC = 2.8, DECEL = 4.2, DECEL_MAX = 9, V_TURN = 3.5;
-const CYCLE = 12, HALF = CYCLE / 2, T_GREEN = 4.6, T_AMBER = 1.1;
 const DIR_X = [1, 0, -1, 0], DIR_Z = [0, 1, 0, -1]; // 0 east, 1 south, 2 west, 3 north (z grows south)
 
 export interface Traffic {
@@ -46,8 +45,8 @@ export interface Traffic {
   step(): void;
   /** Write x/z/ang for a point between the previous step (0) and the current one (1). */
   sample(alpha: number): void;
-  /** Signal shown to a lane arriving at `node` travelling in direction `dir`. */
-  signal(node: number, dir: number): number;
+  /** Signal lamp shown to each lane (SIG_GREEN / SIG_AMBER / SIG_RED). The junctions are demand-actuated. */
+  readonly lamp: Uint8Array;
 }
 
 function mulberry32(seed: number): () => number {
@@ -76,8 +75,8 @@ function centres(spans: Array<[number, number]>, max: number): number[] {
 }
 
 /**
- * `keepClear` is optional static geometry (for example fixed stall positions): a lane passing within 1.9 m of
- * one of those spots is closed to traffic. It is evaluated once, here, and never again.
+ * `keepClear` is optional static geometry (for example fixed stall positions): a lane or junction movement
+ * passing within 1.6 m of one of those spots is closed to traffic. It is evaluated once, here, and never again.
  */
 export function createTraffic(map: MapView, seed: number, wantedCars: number, keepClear: ReadonlyArray<{ x: number; z: number }> = []): Traffic {
   const land = map.water.length ? Math.min(...map.water.map((r) => r.z0)) : map.height;
@@ -106,27 +105,45 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     }
     return [neg, pos];
   };
+  // Solid parked cars from the shared map: lanes squeeze in beside them and never touch their footprints.
+  const solids = (map.cars ?? []).map((c) => {
+    const hx = (c.heading === 90 ? c.width : c.length) / 2, hz = (c.heading === 90 ? c.length : c.width) / 2;
+    return { x0: c.x - hx, z0: c.z - hz, x1: c.x + hx, z1: c.z + hz };
+  });
+  /** Room for a lane on either side of a centre line: the kerb clearance, narrowed by parked cars. */
+  const laneX = (x: number, za: number, zb: number): number => {
+    const s = sideX(x, za, zb);
+    let c = Math.min(s[0], s[1]);
+    for (const r of solids) { if (r.z1 <= za || r.z0 >= zb) continue; c = Math.min(c, r.x1 <= x ? x - r.x1 : r.x0 >= x ? r.x0 - x : -1); }
+    return c;
+  };
+  const laneZ = (z: number, xa: number, xb: number): number => {
+    const s = sideZ(z, xa, xb);
+    let c = Math.min(s[0], s[1]);
+    for (const r of solids) { if (r.x1 <= xa || r.x0 >= xb) continue; c = Math.min(c, r.z1 <= z ? z - r.z1 : r.z0 >= z ? r.z0 - z : -1); }
+    return c;
+  };
   const zLo = zs.length ? zs[0]! : 0, zHi = zs.length ? zs[zs.length - 1]! : 0;
   const xLo = xs.length ? xs[0]! : 0, xHi = xs.length ? xs[xs.length - 1]! : 0;
-  // A road needs room for two lanes; anything narrower (or blocked by a building) carries no traffic.
-  xs = xs.filter((x) => { const s = sideX(x, zLo, zHi); return Math.min(s[0], s[1]) >= 1.95; });
-  zs = zs.filter((z) => { const s = sideZ(z, xLo, xHi); return Math.min(s[0], s[1]) >= 1.95; });
+  // A road needs room for two lanes; anything narrower (or blocked outright) carries no traffic.
+  xs = xs.filter((x) => laneX(x, zLo, zHi) >= 1.95);
+  zs = zs.filter((z) => laneZ(z, xLo, xHi) >= 1.95);
   const nx = xs.length, nz = zs.length;
   const xNeg: number[] = [], xPos: number[] = [], zNeg: number[] = [], zPos: number[] = [];
   const xOff: number[] = [], zOff: number[] = [], hx: number[] = [], hz: number[] = [];
   for (const x of xs) {
     const s = sideX(x, zLo, zHi); const c = Math.min(s[0], s[1]);
-    xNeg.push(s[0]); xPos.push(s[1]); xOff.push(Math.max(0.95, Math.min(1.8, c - 1.0))); hx.push(c + BOX);
+    xNeg.push(s[0]); xPos.push(s[1]); xOff.push(Math.max(0.95, Math.min(1.8, laneX(x, zLo, zHi) - 1.0))); hx.push(c + BOX);
   }
   for (const z of zs) {
     const s = sideZ(z, xLo, xHi); const c = Math.min(s[0], s[1]);
-    zNeg.push(s[0]); zPos.push(s[1]); zOff.push(Math.max(0.95, Math.min(1.8, c - 1.0))); hz.push(c + BOX);
+    zNeg.push(s[0]); zPos.push(s[1]); zOff.push(Math.max(0.95, Math.min(1.8, laneZ(z, xLo, xHi) - 1.0))); hz.push(c + BOX);
   }
 
   // ---- nodes and directed lanes ----
   const nodeCount = nx * nz;
   const nodeX = new Float32Array(nodeCount), nodeZ = new Float32Array(nodeCount);
-  const nodeSignal = new Uint8Array(nodeCount), nodeOffset = new Float32Array(nodeCount);
+  const nodeSignal = new Uint8Array(nodeCount);
   const rand = mulberry32(seed ^ 0x51f15e);
   const maxLinks = Math.max(1, nodeCount * 4);
   const outLink = new Int16Array(maxLinks).fill(-1);   // [node * 4 + dir] -> lane leaving the node
@@ -134,7 +151,6 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
   const linkX1 = new Float32Array(maxLinks), linkZ1 = new Float32Array(maxLinks);
   const llen = new Float32Array(maxLinks);
   const linkDir = new Uint8Array(maxLinks), linkNode = new Int16Array(maxLinks);
-  const lopp = new Int16Array(maxLinks).fill(-1);      // lane arriving head-on at the same node
   const lampX = new Float32Array(maxLinks), lampZ = new Float32Array(maxLinks);
   let linkCount = 0;
   const stop: number[] = [], walks: number[] = [];
@@ -144,7 +160,6 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
   for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
     const n = j * nx + i;
     nodeX[n] = xs[i]!; nodeZ[n] = zs[j]!;
-    nodeOffset[n] = Math.floor(rand() * CYCLE * 4) / 4;
     for (let d = 0; d < 4; d++) {
       const i2 = i + DIR_X[d]!, j2 = j + DIR_Z[d]!;
       if (i2 < 0 || i2 >= nx || j2 < 0 || j2 >= nz) continue;
@@ -160,7 +175,7 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
       let alive = true;
       for (const p of keepClear) {
         const u = Math.max(0, Math.min(1, ((p.x - x0) * (x1 - x0) + (p.z - z0) * (z1 - z0)) / (span * span)));
-        if (Math.hypot(p.x - (x0 + (x1 - x0) * u), p.z - (z0 + (z1 - z0) * u)) < 1.9) alive = false;
+        if (Math.hypot(p.x - (x0 + (x1 - x0) * u), p.z - (z0 + (z1 - z0) * u)) < 1.6) alive = false;
       }
       const side = horiz ? (rz > 0 ? zPos[j]! : zNeg[j]!) : (rx > 0 ? xPos[i]! : xNeg[i]!);
       lanes.push({ n, n2: j2 * nx + i2, d, i, j, x0, z0, x1, z1, span, kerb: side - off, off, alive });
@@ -198,17 +213,14 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     lampZ[L] = Math.max(0.7, Math.min(land - 0.7, c.z1 + rz * (c.kerb + 0.5)));
   }
   for (let n = 0; n < nodeCount; n++) nodeSignal[n] = armCount[n]! >= 3 ? 1 : 0;
-  const armsOf = (n: number): number => armCount[n]!;
 
-  // ---- junction movements: straight and right always; left only where it cannot meet a head-on left ----
+  // ---- junction movements: straight on, right or left (never straight back) ----
   const succ = new Int16Array(maxLinks * 3).fill(-1);
   const ckind = new Uint8Array(maxLinks * 3);          // 0 straight, 1 right, 2 left
   const ccx = new Float32Array(maxLinks * 3), ccz = new Float32Array(maxLinks * 3), clen = new Float32Array(maxLinks * 3);
   for (let L = 0; L < linkCount; L++) {
     const n = linkNode[L]!, d = linkDir[L]!;
-    const straight = outLink[n * 4 + d]!, right = outLink[n * 4 + ((d + 1) % 4)]!;
-    const left = armsOf(n) < 4 ? outLink[n * 4 + ((d + 3) % 4)]! : -1;
-    const options = [straight, right, left];
+    const options = [outLink[n * 4 + d]!, outLink[n * 4 + ((d + 1) % 4)]!, outLink[n * 4 + ((d + 3) % 4)]!];
     for (let k = 0; k < 3; k++) {
       const M = options[k]!;
       if (M < 0) continue;
@@ -220,14 +232,13 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
         const u = s / 16, w = 1 - u;
         const x = w * w * ax + 2 * w * u * qx + u * u * bx, z = w * w * az + 2 * w * u * qz + u * u * bz;
         len += Math.hypot(x - px, z - pz); px = x; pz = z;
-        for (const p of keepClear) if (Math.hypot(p.x - x, p.z - z) < 1.9) blocked = true;
+        for (const p of keepClear) if (Math.hypot(p.x - x, p.z - z) < 1.6) blocked = true;
+        for (const r of solids) if (x > r.x0 - 1 && x < r.x1 + 1 && z > r.z0 - 1 && z < r.z1 + 1) blocked = true;
       }
-      if (blocked) continue;                               // this movement would cross a keep-clear spot
+      if (blocked) continue;                               // this movement would cross a keep-clear spot or a parked car
       succ[L * 3 + k] = M; ckind[L * 3 + k] = k;
       ccx[L * 3 + k] = qx; ccz[L * 3 + k] = qz; clen[L * 3 + k] = len;
     }
-    // the lane that arrives head-on (a left turner on a through road gives way to it)
-    if (straight >= 0) for (let M = 0; M < linkCount; M++) if (linkNode[M] === n && linkDir[M] === (d + 2) % 4) lopp[L] = M;
   }
   // lanes left without any way out are closed, and so is every movement into them
   const linkAlive = new Uint8Array(maxLinks);
@@ -258,6 +269,8 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
   const brake = new Float32Array(carCount), blink = new Int8Array(carCount);
   const kind = new Uint8Array(carCount), style = new Uint8Array(carCount);
   const halfLen = new Float32Array(carCount), halfWid = new Float32Array(carCount);
+  const held = new Float32Array(carCount), noRoom = new Uint8Array(carCount), go = new Uint8Array(carCount), holdNow = new Uint8Array(carCount);
+  const lamp = new Uint8Array(maxLinks).fill(SIG_RED), lampSeen = new Float32Array(maxLinks).fill(-10);
   let time = 0;
 
   const pickNext = (a: number): void => {
@@ -284,21 +297,68 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     cz[a] = w * w * az + 2 * w * u * qz + u * u * bz;
     cang[a] = Math.atan2(w * (qz - az) + u * (bz - qz), w * (qx - ax) + u * (bx - qx));
   };
-  const signal = (node: number, dir: number): number => {
-    if (!nodeSignal[node]) return SIG_GREEN;
-    let p = (time + nodeOffset[node]!) % CYCLE;
-    if (dir % 2 === 1) { p -= HALF; if (p < 0) p += CYCLE; }
-    return p < T_GREEN ? SIG_GREEN : p < T_GREEN + T_AMBER ? SIG_AMBER : SIG_RED;
-  };
-  const oncoming = (M: number): boolean => {
-    const from = llen[M]! - 20;
-    for (let b = 0; b < carCount; b++) if (link[b] === M && s[b]! > from) return true;
-    return false;
-  };
-
   const step = (): void => {
     const DT = TRAFFIC_STEP;
     for (let a = 0; a < carCount; a++) { px[a] = cx[a]!; pz[a] = cz[a]!; pang[a] = cang[a]!; }
+
+    // 1. Is there room to clear the junction on the far side? (All decisions in 1 and 2 read one snapshot.)
+    for (let a = 0; a < carCount; a++) {
+      const L = link[a]!, n = linkNode[L]!, hl = halfLen[a]!;
+      const toLine = llen[L]! - s[a]! - hl;                 // front bumper to the stop line
+      noRoom[a] = 0;
+      if (toLine <= -0.4 || !nodeSignal[n]) continue;
+      const nl = succ[L * 3 + nextK[a]!]!;
+      let tail = 1e9, need = hl * 2 + 1.8;
+      for (let b = 0; b < carCount; b++) {
+        const Lb = link[b]!;
+        if (Lb === nl) { if (s[b]! - halfLen[b]! < tail) tail = s[b]! - halfLen[b]!; }
+        else if (b !== a && linkNode[Lb] === n && succ[Lb * 3 + nextK[b]!] === nl && llen[Lb]! - s[b]! - halfLen[b]! <= -0.4) need += halfLen[b]! * 2 + 1.8;   // already crossing towards the same lane
+      }
+      if (tail < need) noRoom[a] = 1;
+    }
+
+    // 2. Demand-actuated junctions: a lane is released only when nothing that crosses its path is inside the
+    //    junction, is already past its point of no return, or will reach the junction sooner.
+    for (let a = 0; a < carCount; a++) {
+      const L = link[a]!, n = linkNode[L]!, va = v[a]!;
+      const toLine = llen[L]! - s[a]! - halfLen[a]!;
+      let hold = false;
+      const approaching = toLine > -0.4 && nodeSignal[n] === 1;
+      // released last step and too close to stop: it keeps its right of way whatever happens
+      const committed = approaching && go[a] === 1 && toLine < (va * va) / (2 * DECEL_MAX) + 0.6;
+      if (approaching && !committed) {
+        const impatient = held[a]! > 120;                   // two minutes: stop queueing politely
+        if (noRoom[a] && !impatient) {
+          hold = true;
+          // boxed in for a while: take another way out instead of waiting for a jam to clear
+          if (held[a]! > 6 && va < 0.3) { pickNext(a); held[a] = 3; }
+        } else {
+          const turn = ckind[L * 3 + nextK[a]!]!, dir = linkDir[L]!;
+          const eta = Math.max(0, toLine) / Math.max(va, 1.5);
+          for (let b = 0; b < carCount; b++) {
+            const Lb = link[b]!;
+            if (b === a || Lb === L || linkNode[Lb] !== n) continue;
+            // head-on lanes can run together unless one of them turns left across the other
+            if ((linkDir[Lb]! + dir) % 2 === 0 && turn !== 2 && ckind[Lb * 3 + nextK[b]!] !== 2) continue;
+            const toLineB = llen[Lb]! - s[b]! - halfLen[b]!;
+            if (toLineB <= -0.4) { hold = true; break; }                                             // inside the junction
+            if (go[b] === 1 && toLineB < (v[b]! * v[b]!) / (2 * DECEL_MAX) + 0.6) { hold = true; break; }   // cannot stop any more
+            if (noRoom[b] || impatient) continue;
+            const etaB = Math.max(0, toLineB) / Math.max(v[b]!, 1.5);
+            if (etaB < eta || (etaB === eta && b < a)) { hold = true; break; }
+          }
+        }
+      }
+      holdNow[a] = hold ? 1 : 0;
+      held[a] = (hold || noRoom[a]) && va < 0.3 ? held[a]! + DT : 0;
+      if (nodeSignal[n] && (toLine <= -0.4 || (!hold && toLine < 15))) lampSeen[L] = time;
+    }
+    for (let a = 0; a < carCount; a++) {
+      const L = link[a]!;
+      go[a] = !holdNow[a] && nodeSignal[linkNode[L]!] && llen[L]! - s[a]! - halfLen[a]! > -0.4 ? 1 : 0;
+    }
+
+    // 3. Move.
     for (let a = 0; a < carCount; a++) {
       const L = link[a]!, kk = L * 3 + nextK[a]!, len = llen[L]!, total = len + clen[kk]!;
       const sa = s[a]!, va = v[a]!, hl = halfLen[a]!, turn = ckind[kk]!;
@@ -308,17 +368,7 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
         const ve = sa < len ? Math.sqrt(V_TURN * V_TURN + 2 * DECEL * (len - sa)) : V_TURN;
         if (ve < vmax) vmax = ve;
       }
-      const toLine = len - sa - hl;                       // front bumper to the stop line
-      if (toLine > -0.4) {
-        const n = linkNode[L]!;
-        let hold = false;
-        if (nodeSignal[n]) {
-          const st = signal(n, linkDir[L]!);
-          hold = st === SIG_RED || (st === SIG_AMBER && toLine > (va * va) / (2 * DECEL * 1.5));
-        }
-        if (!hold && turn === 2 && lopp[L]! >= 0) hold = oncoming(lopp[L]!);
-        if (hold) { const ve = Math.sqrt(2 * DECEL * Math.max(0, toLine - 0.3)); if (ve < vmax) vmax = ve; }
-      }
+      if (holdNow[a]) { const ve = Math.sqrt(2 * DECEL * Math.max(0, len - sa - hl - 0.3)); if (ve < vmax) vmax = ve; }
       // keep a gap to whoever is ahead on this lane or the next one
       const nl = succ[kk]!;
       let gap = 1e9, vl = 0;
@@ -351,6 +401,7 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
       pose(a);
     }
     time += DT;
+    for (let L = 0; L < linkCount; L++) { const age = time - lampSeen[L]!; lamp[L] = age < 0.12 ? SIG_GREEN : age < 1 ? SIG_AMBER : SIG_RED; }
   };
 
   const sample = (alpha: number): void => {
@@ -391,6 +442,6 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     linkCount, linkX1, linkZ1, linkDir, linkNode, linkAlive, lampX, lampZ,
     stopLines: new Float32Array(stop), crosswalks: new Float32Array(walks),
     carCount, x, z, ang, speed: v, brake, blink, kind, style, halfLen, halfWid,
-    time: () => time, step, sample, signal,
+    time: () => time, step, sample, lamp,
   };
 }

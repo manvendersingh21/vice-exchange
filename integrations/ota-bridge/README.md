@@ -48,3 +48,15 @@ only when the server supplied them.
 Upstream game: MIT, copyright mehulkapadia5. Human rigs used for our figures are upstream's CC-BY models (Renderpeople
 "Nathan" and the two suit models; see each `license.txt` upstream). The bridge does not use upstream's boot-screen
 branding, its superhero-suit content or its "peter" player model. Known limits are listed on the board.
+
+## WORLD view in the browser UI (Godot Web export)
+The browser app has a third city view, WORLD, that embeds this client as a Web export and plays as the page's own
+player (it presents the page's session token on `/bridge`; the browser socket keeps the session).
+Build it (needs the Godot 4.7.2 web export templates in `~/Library/Application Support/Godot/export_templates/4.7.2.stable/`):
+```
+python3 integrations/ota-bridge/apply.py          # also adds the "Web" export preset
+cd integrations/open-theft-auto && godot --headless --path . --export-release "Web" ../../apps/web/public/world/index.html
+```
+Output goes to `apps/web/public/world/` (git-ignored, about 400 MB). Open `http://localhost:5173/?...&view=world`
+or press WORLD in the header. The client connects to `ws://<page host>:3001/bridge`; override with `&bridge=ws://host:port/bridge`.
+On the web it runs single-threaded on the Compatibility renderer with background life and real-time shadows off and 3D at 60% scale.

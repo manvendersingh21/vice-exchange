@@ -2,6 +2,7 @@
 // component runs exactly as it will in the app. Open /src/components/wow/SwarmGraphPreview.html
 //   ?w=420&h=320   fixed-size box (default: fill the window)      ?loop=0   play the scenario once
 //   ?quiet=1       no scenario, just the seeded state             ?tick=0   do not simulate the 10 Hz world tick
+//   ?live=1&room=VICE-42   no mock at all: join the real server as a spectator through the normal socket client
 import { Profiler } from "react";
 import { createRoot } from "react-dom/client";
 import { CITY_MAP } from "@vice/contracts";
@@ -12,7 +13,10 @@ import type {
 import "../../styles.css";
 import SwarmGraph from "./SwarmGraph";
 import { useGame } from "../../state/gameStore";
+import { joinRoom } from "../../net/socketClient";
 
+// Other modules are being edited while this page is open: a hot update must restart the page, not re-run this module.
+if (import.meta.hot) import.meta.hot.accept(() => location.reload());
 const q = new URLSearchParams(location.search);
 const ROOM = "VICE-42";
 let seq = 100, runNo = 0, runId = "run_mock_0", decSeq = 0, msgSeq = 0, memSeq = 0, tradeSeq = 0, simMs = 0;
@@ -102,8 +106,12 @@ function seed(): RoomSnapshot {
 }
 
 // ---- pushes, shaped like the socket client's ----
+// Mock causation, wired like the engine: observed/delivered/bulletin -> decision -> its effects (message, trade).
+let cause: string | null = null;
+const heard: Record<string, string> = {}, sentEvent: Record<string, string> = {};
+function caused<R>(by: string | null | undefined, run: () => R): R { const prev = cause; cause = by ?? null; try { return run(); } finally { cause = prev; } }
 function ev<T extends EventType>(type: T, actorId: string, payload: EventPayloads[T]): GameEvent<T> {
-  const e: GameEvent<T> = { schemaVersion: 1, eventId: `evt_${++seq}`, roomId: "room", runId, serverSequence: seq, time: new Date().toISOString(), simTimeMs: simMs, type, actorId, causationId: null, correlationId: "story_1", payload };
+  const e: GameEvent<T> = { schemaVersion: 1, eventId: `evt_${++seq}`, roomId: "room", runId, serverSequence: seq, time: new Date().toISOString(), simTimeMs: simMs, type, actorId, causationId: cause, correlationId: "story_1", payload };
   g().applyEvent(e as unknown as GameEvent);
   return e;
 }
@@ -114,7 +122,7 @@ const learn = (id: string, kind: MemoryEntry["sourceKind"], text: string): void 
 
 function request(id: string, offered: string[]): string {
   const [, role] = NAMES[id]!; const decisionId = `dec_${++decSeq}`;
-  ev("DECISION_REQUESTED", id, { decisionId, agentId: id, role, mode: "drex", offeredActions: offered, triggerEventId: "", stateHash: "" });
+  caused(heard[id], () => ev("DECISION_REQUESTED", id, { decisionId, agentId: id, role, mode: "drex", offeredActions: offered, triggerEventId: "", stateHash: "" }));
   agent(id, { pendingDecisionId: decisionId });
   return decisionId;
 }
@@ -124,16 +132,18 @@ function resolve(id: string, decisionId: string, action: string, source: Decisio
   const top = confidence === null ? 0 : source === "drex_low_confidence_guardrail" ? 0.5 : Math.min(0.995, 0.5 + confidence / 2);
   const probabilities = confidence === null ? null : Object.fromEntries([[action, top], ...rest.map((o, i) => [o, (1 - top) * (i === 0 ? 0.8 : 0.2 / Math.max(1, rest.length - 1))])]) as Record<string, number>;
   const t = trace(id, name, role, action, source, offered, confidence, probabilities, decisionId);
-  ev("DECISION_RESOLVED", id, { decisionId, agentId: id, role, status: t.status, decisionSource: source, provider: t.provider, model: t.model, chosenAction: action, providerChoice: t.providerChoice,
-    offeredActions: offered, confidence, probabilities, providerRequestId: t.providerRequestId, latencyMs: t.latencyMs, providerEvalMs: t.providerEvalMs, errorType: t.errorType, rejectReason: null });
-  effect?.();
-  ev("AGENT_ACTION_APPLIED", id, { decisionId, agentId: id, role, action, decisionSource: source, detail: action });
+  const resolved = caused(heard[id], () => ev("DECISION_RESOLVED", id, { decisionId, agentId: id, role, status: t.status, decisionSource: source, provider: t.provider, model: t.model, chosenAction: action, providerChoice: t.providerChoice,
+    offeredActions: offered, confidence, probabilities, providerRequestId: t.providerRequestId, latencyMs: t.latencyMs, providerEvalMs: t.providerEvalMs, errorType: t.errorType, rejectReason: null }));
+  caused(resolved.eventId, () => {
+    effect?.();
+    ev("AGENT_ACTION_APPLIED", id, { decisionId, agentId: id, role, action, decisionSource: source, detail: action });
+  });
   agent(id, { pendingDecisionId: null, lastDecision: t, recentDecisions: [t, ...g().npcs[id]!.recentDecisions].slice(0, 8) });
   metrics = { ...metrics, decisions: { ...metrics.decisions, total: metrics.decisions.total + 1, bySource: { ...metrics.decisions.bySource, [source]: (metrics.decisions.bySource[source] ?? 0) + 1 } } };
 }
 function send(from: string, to: string, kind: MessageKind, hop: number): string {
   const messageId = `msg_${++msgSeq}`;
-  ev("AGENT_MESSAGE_SENT", from, { messageId, senderId: from, recipientId: to, kind, sourceMemoryId: null, sourceEventId: "", subjectCharacterId: "c_ace", summary: "", hop });
+  sentEvent[messageId] = ev("AGENT_MESSAGE_SENT", from, { messageId, senderId: from, recipientId: to, kind, sourceMemoryId: null, sourceEventId: "", subjectCharacterId: "c_ace", summary: "", hop }).eventId;
   const edges = metrics.edges.map((e) => ({ ...e }));
   const hit = edges.find((e) => e.from === from && e.to === to && e.kind === kind);
   if (hit) hit.count++; else edges.push({ from, to, kind, count: 1 });
@@ -141,7 +151,7 @@ function send(from: string, to: string, kind: MessageKind, hop: number): string 
   return messageId;
 }
 function deliver(messageId: string, from: string, to: string, kind: MessageKind, hop: number): void {
-  ev("AGENT_MESSAGE_DELIVERED", to, { messageId, senderId: from, recipientId: to, kind, memoryId: "", hop });
+  heard[to] = caused(sentEvent[messageId], () => ev("AGENT_MESSAGE_DELIVERED", to, { messageId, senderId: from, recipientId: to, kind, memoryId: "", hop })).eventId;
   learn(to, "MESSAGE", "Told about the incident");
   metrics = { ...metrics, messages: { ...metrics.messages, delivered: metrics.messages.delivered + 1 } };
 }
@@ -152,13 +162,14 @@ function npcTrade(id: string, ticker: string, side: "BUY" | "SELL", price: numbe
   metrics = { ...metrics, trades: { ...metrics.trades, executed: metrics.trades.executed + 1, byNpc: metrics.trades.byNpc + 1 } };
 }
 function bulletin(by: string, characterId: string, ticker: string): void {
-  ev("BULLETIN_PUBLISHED", by, { bulletinId: `bul_${seq}`, characterId, ticker, lastKnown: { x: 47, z: 60 }, issuedBy: by, recipientIds: Object.keys(NAMES) });
+  const b = caused(heard[by], () => ev("BULLETIN_PUBLISHED", by, { bulletinId: `bul_${seq}`, characterId, ticker, lastKnown: { x: 47, z: 60 }, issuedBy: by, recipientIds: Object.keys(NAMES) }));
+  for (const id of Object.keys(NAMES)) if (id !== by) heard[id] = b.eventId;
   ev("WANTED_STATUS_CHANGED", characterId, { characterId, ticker, wanted: true, heat: 42, wantedLevel: 2, reason: "police bulletin" });
   character(characterId, { status: "WANTED", wanted: true, heat: 42, wantedLevel: 2 });
   for (const id of Object.keys(NAMES)) learn(id, "BULLETIN", `Bulletin: ${ticker} is wanted`);
 }
 function observe(id: string, characterId: string, factType: "INCIDENT" | "SIGHTING"): void {
-  ev("NPC_OBSERVED", id, { npcId: id, memoryId: "", factType, subjectCharacterId: characterId, distance: 9, incidentId: null, summary: "" });
+  heard[id] = ev("NPC_OBSERVED", id, { npcId: id, memoryId: "", factType, subjectCharacterId: characterId, distance: 9, incidentId: null, summary: "" }).eventId;
   learn(id, "DIRECT", factType === "INCIDENT" ? "Saw the job first-hand" : "Has eyes on the suspect");
 }
 
@@ -238,10 +249,11 @@ function play(): void {
   for (const [at, run] of scenario()) timers.push(setTimeout(() => { simMs = Math.round(performance.now() - t0); run(); }, at));
   if (q.get("loop") !== "0") timers.push(setTimeout(play, 17000));
 }
+const LIVE = q.get("live") === "1";
 // metrics.update arrives once a second in the real app
-setInterval(() => { if (metrics && g().metrics !== metrics) useGame.setState({ metrics }); }, 1000);
+if (!LIVE) setInterval(() => { if (metrics && g().metrics !== metrics) useGame.setState({ metrics }); }, 1000);
 // the 10 Hz world tick (the graph must NOT re-render because of it)
-if (q.get("tick") !== "0") {
+if (!LIVE && q.get("tick") !== "0") {
   let n = 0;
   setInterval(() => {
     n++;
@@ -267,5 +279,10 @@ function Preview() {
     </div>
   );
 }
-play();
+if (LIVE) {
+  const roomCode = q.get("room") ?? ROOM;
+  void joinRoom({ create: false, roomCode, nickname: "SwarmCam", role: "SPECTATOR" }).then((ack) => {
+    if (!ack.ok) void joinRoom({ create: true, roomCode, nickname: "SwarmCam", role: "SPECTATOR" });
+  });
+} else play();
 createRoot(document.getElementById("root")!).render(<Preview />);

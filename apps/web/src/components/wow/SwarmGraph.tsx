@@ -57,17 +57,26 @@ const r1 = (n: number): number => Math.round(n * 10) / 10;
 let fontFamily = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 const widthCache = new Map<string, number>();
+/** Width of `text` in viewBox units. Measured at the real size: system fonts track wider at small sizes. */
 function tw(text: string, size: number, weight = 800, spacingEm = 0): number {
-  const key = `${weight}|${fontFamily}|${text}`;
-  let em = widthCache.get(key);
-  if (em === undefined) {
+  const key = `${weight}|${size}|${text}`;
+  let w = widthCache.get(key);
+  if (w === undefined) {
     if (measureCtx === undefined) measureCtx = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
-    if (measureCtx) { measureCtx.font = `${weight} 100px ${fontFamily}`; em = measureCtx.measureText(text).width / 100; }
-    else em = text.length * 0.62;
+    if (measureCtx) { measureCtx.font = `${weight} ${size}px ${fontFamily}`; w = measureCtx.measureText(text).width * 1.015; }
+    else w = text.length * 0.66 * size;
     if (widthCache.size > 4000) widthCache.clear();
-    widthCache.set(key, em);
+    widthCache.set(key, w);
   }
-  return em * size + spacingEm * size * text.length;
+  return w + spacingEm * size * text.length;
+}
+/** Width of the one-row legend, used to decide between one and two legend rows. */
+function legendWidth(): number {
+  const fs = 12;
+  const kinds = LEGEND_KINDS.reduce((a, k) => a + 19 + tw(k, fs, 700, 0.05) + 13, 0);
+  const extra = 11 + tw("BUY", fs, 700, 0.05) + 9 + 11 + tw("SELL", fs, 700, 0.05) + 13 + 22 + tw("PURSUIT", fs, 700, 0.05) + 13;
+  const src = tw("DECIDED BY", 10.5, 700, 0.1) + 9 + LEGEND_SOURCES.reduce((a, k) => a + 17 + tw(srcStyle(k).word, fs, 700, 0.05) + 12, 0) - 12;
+  return kinds + extra + src + 22;
 }
 
 // ---------- narrow store selectors: a signature string changes only when something this graph draws changes ----------
@@ -118,7 +127,7 @@ function computeLayout(cw: number, ch: number, npcs: ReadonlyArray<{ id: string;
   const s = raw <= 0.7 ? raw : 0.92 * Math.pow(raw, 0.766);
   const vw = w / s, vh = h / s;
   const pad = 8, headerH = inline ? 38 : 42;
-  const legendRows = vw >= 930 ? 1 : 2;
+  const legendRows = legendWidth() + pad * 2 <= vw ? 1 : 2;
   const legendH = legendRows * 19 + 6;
   const gTop = headerH + 2, gBot = vh - legendH - 4, H = gBot - gTop;
   const streetW = clamp(vw * 0.15, 92, 150);
@@ -230,6 +239,26 @@ function offeredFor(n: AgentView, E: EvtState): string[] {
   if (p) return p.offered;
   const t = n.pendingDecisionId ? n.recentDecisions.find((d) => d.id === n.pendingDecisionId) : undefined;
   return t ? Object.keys(t.offeredActions) : [];
+}
+
+/**
+ * The recorded causal chain behind an NPC trade, as graph node ids from the outlaw to the exchange. It follows
+ * causationId upstream through the events still in the store, so it only ever shows links that were recorded.
+ */
+function causalChain(trade: GameEvent, events: GameEvent[], traderId: string): string[] {
+  const byId = new Map(events.map((x) => [x.eventId, x]));
+  const out: string[] = [EXCHANGE, traderId];
+  const push = (id: string | null | undefined): void => { if (id && out[out.length - 1] !== id) out.push(id); };
+  let cur = trade.causationId ? byId.get(trade.causationId) : undefined;
+  for (let guard = 0; cur && guard < 40; guard++) {
+    if (cur.type === "AGENT_MESSAGE_DELIVERED") push((cur as GameEvent<"AGENT_MESSAGE_DELIVERED">).payload.recipientId);
+    else if (cur.type === "AGENT_MESSAGE_SENT") push((cur as GameEvent<"AGENT_MESSAGE_SENT">).payload.senderId);
+    else if (cur.type === "BULLETIN_PUBLISHED") { push(BULLETIN); push((cur as GameEvent<"BULLETIN_PUBLISHED">).payload.issuedBy); }
+    else if (cur.type === "NPC_OBSERVED") { const o = (cur as GameEvent<"NPC_OBSERVED">).payload; push(o.npcId); push(o.subjectCharacterId); break; }
+    else if (cur.type === "INCIDENT_OCCURRED") { push((cur as GameEvent<"INCIDENT_OCCURRED">).payload.characterId); break; }
+    cur = cur.causationId ? byId.get(cur.causationId) : undefined;
+  }
+  return out.reverse();
 }
 
 // ---------- small SVG pieces ----------
@@ -396,21 +425,54 @@ export default function SwarmGraph(): ReactElement {
       };
       if (delay > 0) later(add, delay); else add();
     };
+    /** A message tag looks for a spot beside its edge that covers no node, no label and no other tag. */
+    const tagRects: Array<{ x0: number; y0: number; x1: number; y1: number; until: number }> = [];
+    const freeSpot = (c: Curve, w: number, h: number, life: number): { x: number; y: number } => {
+      const t = performance.now(), Lc = layoutRef.current;
+      for (let i = tagRects.length - 1; i >= 0; i--) if (tagRects[i]!.until < t) tagRects.splice(i, 1);
+      let first: { x: number; y: number } | null = null;
+      for (const u of [0.5, 0.36, 0.64, 0.26, 0.74]) for (const side of [-1, 1]) {
+        const a = curveAt(c, u), b = curveAt(c, Math.min(1, u + 0.02));
+        let tx = b.x - a.x, ty = b.y - a.y; const d = Math.hypot(tx, ty) || 1; tx /= d; ty /= d;
+        const off = (Math.abs(tx) * h) / 2 + (Math.abs(ty) * w) / 2 + 7;
+        const x = clamp(a.x - ty * side * off, w / 2 + 4, Lc.vw - w / 2 - 4), y = a.y + tx * side * off;
+        if (!first) first = { x, y };
+        const r = { x0: x - w / 2 - 2, y0: y - h / 2 - 2, x1: x + w / 2 + 2, y1: y + h / 2 + 2 };
+        let ok = r.y0 > Lc.gTop + 16 && r.y1 < Lc.gBot && !(r.x0 < Lc.law.x0 + 84 && r.y1 > Lc.main.y1 - 2 && r.y0 < Lc.law.y0 + 22);
+        if (ok) for (const n of Lc.nodes.values()) {
+          if (n.kind === "anchor") continue;
+          const top = n.y - n.r - (Lc.inline ? 4 : 27), bot = n.y + n.r + (Lc.inline ? 42 : 20);
+          if (r.x1 > n.x - 48 && r.x0 < n.x + 48 && r.y1 > top && r.y0 < bot) { ok = false; break; }
+        }
+        if (ok) for (const o of tagRects) if (r.x1 > o.x0 && r.x0 < o.x1 && r.y1 > o.y0 && r.y0 < o.y1) { ok = false; break; }
+        if (ok) { tagRects.push({ ...r, until: t + life }); return { x, y }; }
+      }
+      const f = first ?? { x: c.cx, y: c.cy };
+      tagRects.push({ x0: f.x - w / 2, y0: f.y - h / 2, x1: f.x + w / 2, y1: f.y + h / 2, until: t + life });
+      return f;
+    };
     /** Labels at the exchange stack upward instead of overlapping; a slot is reserved for the label's whole life. */
-    const slotBusyUntil: number[] = [];
-    const exchangeSlot = (lifeMs: number): number => {
-      const t = performance.now();
+    const slotBusyUntil: number[] = [], slotWidth: number[] = [];
+    let lastSweepAt = -1e9;
+    /** Stacked layout: labels pile up above the exchange. Inline layout: they line up leftward along the lane top. */
+    const exchangeSpot = (text: string, size: number, lifeMs: number): { x: number; y: number; slot: number } => {
+      const t = performance.now(), Lc = layoutRef.current, ex = Lc.nodes.get(EXCHANGE);
+      const w = tw(text, size, 800, 0.05) + size * 1.35 + 4, half = w / 2;
       let i = 0;
       while (i < 4 && (slotBusyUntil[i] ?? 0) > t) i++;
       if (i >= 4) i = 0;
-      slotBusyUntil[i] = t + lifeMs;
-      return i;
+      slotBusyUntil[i] = t + lifeMs; slotWidth[i] = w;
+      if (!ex) return { x: Lc.vw / 2, y: Lc.gTop + 20, slot: i };
+      if (!Lc.inline) return { x: clamp(ex.x, half + 8, Lc.vw - half - 8), y: ex.y - ex.r - 15 - i * 21, slot: i };
+      let right = Lc.vw - 8;
+      for (let k = 0; k < i; k++) right -= (slotWidth[k] ?? 0) + 6;
+      return { x: Math.max(half + 8, right - half), y: ex.y - ex.r - 15, slot: i };
     };
     const reset = (): void => {
       fxRef.current?.clear();
       const E = evtRef.current; E.pending.clear(); E.resolved.clear(); E.stamps.clear(); E.seen.clear();
       popsRef.current = [];
-      slotBusyUntil.length = 0;
+      slotBusyUntil.length = 0; slotWidth.length = 0; tagRects.length = 0;
       for (const t of timers) clearTimeout(t);
       timers.clear();
       bump();
@@ -420,6 +482,13 @@ export default function SwarmGraph(): ReactElement {
       const fx = fxRef.current, Lc = layoutRef.current, E = evtRef.current, now = performance.now();
       const newest = fresh[fresh.length - 1]!.simTimeMs, flood = fresh.length > 40;
       const node = (id: string | null | undefined): GNode | null => (id ? Lc.nodes.get(id) ?? null : null);
+      /** An upward arc from a to b that is as high as `want` allows but never leaves the graph area. */
+      const arcBend = (aId: string, bId: string, want: number): number => {
+        const a = node(aId), b = node(bId);
+        if (!a || !b) return -want;
+        const d = Math.hypot(b.x - a.x, b.y - a.y) || 1, room = Math.max(8, Math.min(a.y, b.y) - Lc.gTop - 6);
+        return -Math.min(want, (2 * room) / d);
+      };
       let dirty = false;
       for (const e of fresh) {
         // A catch-up burst (resync after a gap) only animates its most recent moments.
@@ -430,7 +499,10 @@ export default function SwarmGraph(): ReactElement {
             if (!animate || !fx) break;
             fx.flight(p.messageId, p.senderId, p.recipientId, KIND_COLOR[p.kind]);
             const c = Lc.curve(p.senderId, p.recipientId);
-            if (c && Lc.detail) { const m = curveAt(c, 0.5); pop({ kind: "pill", x: m.x, y: m.y - 12, text: `${p.kind} · HOP ${p.hop}`, color: KIND_COLOR[p.kind], size: 10.5, dur: 1500, strong: false }); }
+            if (c && Lc.detail) {
+              const text = `${p.kind} · HOP ${p.hop}`, at = freeSpot(c, tw(text, 10.5, 800, 0.05) + 14.2, 17.5, 1500);
+              pop({ kind: "pill", x: at.x, y: at.y, text, color: KIND_COLOR[p.kind], size: 10.5, dur: 1500, strong: false });
+            }
             break;
           }
           case "AGENT_MESSAGE_DELIVERED": {
@@ -443,9 +515,9 @@ export default function SwarmGraph(): ReactElement {
             if (!animate || !fx) break;
             const gold = KIND_COLOR.BULLETIN, from = node(p.issuedBy), hub = node(BULLETIN);
             if (from) fx.ring(p.issuedBy, { color: gold, from: from.r + 2, to: from.r + 30, dur: 560, width: 2.4 });
-            fx.beam(p.issuedBy, BULLETIN, { color: gold, dur: 340, size: 5.6, tail: 70 });
+            fx.beam(p.issuedBy, BULLETIN, { color: gold, dur: 340, size: 8, tail: 90 });
             if (hub) fx.ring(BULLETIN, { color: gold, delay: 330, from: hub.r, to: Math.hypot(Lc.vw, Lc.vh) * 0.72, dur: 1900, count: 3, gap: 210, width: 2.6, alpha: 0.85 });
-            p.recipientIds.forEach((id, i) => { if (id !== p.issuedBy && node(id)) fx.beam(BULLETIN, id, { color: gold, delay: 380 + i * 34, dur: 560, size: 3.8, tail: 64 }); });
+            p.recipientIds.forEach((id, i) => { if (id !== p.issuedBy && node(id)) fx.beam(BULLETIN, id, { color: gold, delay: 380 + i * 34, dur: 600, size: 5.4, tail: 84 }); });
             if (hub) {
               const who = p.ticker ?? st.characters[p.characterId]?.nickname ?? "SUSPECT";
               pop({ kind: "pill", x: hub.x, y: hub.y - hub.r - 16, text: `WANTED · ${who}`, color: C.wanted, size: 12.5, dur: 2600, strong: true }, 330);
@@ -456,7 +528,7 @@ export default function SwarmGraph(): ReactElement {
             const p = (e as GameEvent<"NPC_OBSERVED">).payload;
             if (!animate || !fx) break;
             const n = node(p.npcId);
-            if (p.subjectCharacterId && node(p.subjectCharacterId)) fx.beam(p.subjectCharacterId, p.npcId, { color: "#ffffff", dur: 320, size: 3.6, tail: 110 });
+            if (p.subjectCharacterId && node(p.subjectCharacterId)) fx.beam(p.subjectCharacterId, p.npcId, { color: "#ffffff", dur: 340, size: 5, tail: 130 });
             if (n) {
               fx.ring(p.npcId, { color: "#ffffff", delay: 300, from: n.r, to: n.r + 20, dur: 460, width: 1.6, alpha: 0.8 });
               pop({ kind: "eye", x: n.x - n.r * 0.86, y: n.y - n.r * 0.86, text: p.factType, color: "#ffffff", size: 9, dur: 1500, strong: false }, 240);
@@ -472,7 +544,7 @@ export default function SwarmGraph(): ReactElement {
             const p = (e as GameEvent<"MISSION_COMPLETED">).payload, n = node(p.characterId);
             if (!animate || !fx || !n) break;
             fx.ring(p.characterId, { color: C.mint, from: n.r, to: n.r + 30, dur: 700, width: 2 });
-            if (Lc.detail) pop({ kind: "pill", x: Math.max(n.x, 52), y: n.y - n.r - 14, text: "JOB DONE", color: C.mint, size: 10.5, dur: 1500, strong: false });
+            if (Lc.detail) pop({ kind: "pill", x: Math.max(n.x, 52), y: n.y - n.r - 30, text: "JOB DONE", color: C.mint, size: 10.5, dur: 1500, strong: false });
             break;
           }
           case "DECISION_REQUESTED": {
@@ -500,19 +572,27 @@ export default function SwarmGraph(): ReactElement {
             const p = (e as GameEvent<"TRADE_EXECUTED">).payload, ex = node(EXCHANGE);
             if (!animate || !fx || !ex) break;
             const col = p.side === "BUY" ? C.buy : C.sell, npc = p.actorKind === "NPC" && node(p.actorId);
-            fx.beam(npc ? p.actorId : HUMAN, EXCHANGE, { color: col, dur: npc ? 620 : 520, size: 6.6, tail: 90, bend: npc ? undefined : 0.12 });
+            fx.beam(npc ? p.actorId : HUMAN, EXCHANGE, { color: col, dur: npc ? 620 : 520, size: 9.5, tail: 110, bend: npc ? undefined : 0.12 });
             fx.ring(EXCHANGE, { color: col, delay: npc ? 600 : 500, from: ex.r, to: ex.r + 34, dur: 620, width: 2.6 });
             const text = `${npc ? "" : `${p.actorName} · `}${p.side} ${p.ticker} @ ${vd(p.executionPrice)}`.toUpperCase();
-            const slot = exchangeSlot(2560), half = (tw(text, 12, 800, 0.05) + 17) / 2;
-            pop({ kind: "pill", x: clamp(ex.x, half + 4, Lc.vw - half - 4), y: ex.y - ex.r - 15 - slot * 21, text, color: col, size: 12, dur: 2300, strong: true, slot }, 260);
+            const at = exchangeSpot(text, 12, 2560);
+            pop({ kind: "pill", x: at.x, y: at.y, text, color: col, size: 12, dur: 2300, strong: true, slot: at.slot }, 260);
+            // Once the order has landed, one white pulse races down the whole recorded chain that led to it.
+            const chain = npc ? causalChain(e, st.events, p.actorId).filter((id) => !!node(id)) : [];
+            if (chain.length >= 4 && now - lastSweepAt > 1000) {
+              lastSweepAt = now;
+              for (let i = 0; i + 1 < chain.length; i++) fx.beam(chain[i]!, chain[i + 1]!, { color: "#ffffff", delay: 820 + i * 210, dur: 270, size: 7.5, tail: 240 });
+              const cap = `CAUSAL CHAIN · ${chain.length - 1} LINKS · ${p.side} ${p.ticker}`, ch = (tw(cap, 12, 800, 0.05) + 17) / 2;
+              pop({ kind: "pill", x: clamp((Lc.main.x0 + Lc.main.x1) / 2, ch + 8, Lc.vw - ch - 8), y: Lc.detail && !Lc.inline ? Lc.main.y0 + 34 : Lc.main.y1 + 3, text: cap, color: "#ffffff", size: 12, dur: 3000, strong: true }, 820);
+            }
             break;
           }
           case "LISTING_OPENED": {
             const p = (e as GameEvent<"LISTING_OPENED">).payload, ex = node(EXCHANGE);
             if (!animate || !fx || !ex || !node(p.characterId)) break;
-            fx.beam(p.characterId, EXCHANGE, { color: C.mint, dur: 900, size: 5, tail: 120, bend: -0.2 });
-            const text = `LISTED ${p.ticker} @ ${vd(p.spotPrice)}`, slot = exchangeSlot(2900), half = (tw(text, 12, 800, 0.05) + 17) / 2;
-            pop({ kind: "pill", x: clamp(ex.x, half + 4, Lc.vw - half - 4), y: ex.y - ex.r - 15 - slot * 21, text, color: C.mint, size: 12, dur: 2200, strong: false, slot }, 700);
+            fx.beam(p.characterId, EXCHANGE, { color: C.mint, dur: 900, size: 7, tail: 140, bend: arcBend(p.characterId, EXCHANGE, 0.2) });
+            const text = `LISTED ${p.ticker} @ ${vd(p.spotPrice)}`, at = exchangeSpot(text, 12, 2900);
+            pop({ kind: "pill", x: at.x, y: at.y, text, color: C.mint, size: 12, dur: 2200, strong: false, slot: at.slot }, 700);
             break;
           }
           case "WANTED_STATUS_CHANGED": {
@@ -524,7 +604,7 @@ export default function SwarmGraph(): ReactElement {
             const p = (e as GameEvent<"ESCAPE_SUCCEEDED">).payload, n = node(p.characterId);
             if (!animate || !fx || !n) break;
             fx.ring(p.characterId, { color: C.mint, from: n.r, to: n.r + 44, dur: 900, count: 2, gap: 180 });
-            pop({ kind: "pill", x: Math.max(n.x, 50), y: n.y - n.r - 14, text: "ESCAPED", color: C.mint, size: 11.5, dur: 2000, strong: true });
+            pop({ kind: "pill", x: Math.max(n.x, 50), y: n.y - n.r - 30, text: "ESCAPED", color: C.mint, size: 11.5, dur: 2000, strong: true });
             break;
           }
           case "CAPTURE_SUCCEEDED": {
@@ -533,16 +613,16 @@ export default function SwarmGraph(): ReactElement {
             if (p.captorKind === "NPC" && node(p.captorId)) { fx.bolt(p.captorId, p.characterId, C.wanted); fx.bolt(p.captorId, p.characterId, "#ffffff", 140); }
             fx.ring(p.characterId, { color: C.wanted, from: n.r, to: n.r + 90, dur: 1100, count: 3, gap: 150, width: 3 });
             const text = `CAPTURED BY ${shortName(p.captorName).toUpperCase()}`, half = (tw(text, 12.5, 800, 0.05) + 17) / 2;
-            pop({ kind: "pill", x: clamp(n.x, half + 4, Lc.vw - half - 4), y: n.y - n.r - 16, text, color: C.wanted, size: 12.5, dur: 3200, strong: true }, 120);
+            pop({ kind: "pill", x: clamp(n.x, half + 8, Lc.vw - half - 8), y: n.y - n.r - 32, text, color: C.wanted, size: 12.5, dur: 3200, strong: true }, 120);
             break;
           }
           case "LISTING_HALTED": {
             const p = (e as GameEvent<"LISTING_HALTED">).payload, ex = node(EXCHANGE);
             if (!animate || !fx || !ex) break;
-            if (node(p.characterId)) fx.beam(p.characterId, EXCHANGE, { color: C.sell, delay: 260, dur: 760, size: 8.5, tail: 150, bend: -0.24 });
+            if (node(p.characterId)) fx.beam(p.characterId, EXCHANGE, { color: C.sell, delay: 260, dur: 760, size: 12, tail: 190, bend: arcBend(p.characterId, EXCHANGE, 0.24) });
             fx.ring(EXCHANGE, { color: C.sell, delay: 980, from: ex.r, to: ex.r + 70, dur: 1000, count: 3, gap: 140, width: 3 });
-            const text = `${p.ticker} HALTED · ${vd(p.finalSpotBeforeHalt)} → V$0`, slot = exchangeSlot(4500), half = (tw(text, 13, 800, 0.05) + 18) / 2;
-            pop({ kind: "pill", x: clamp(ex.x, half + 4, Lc.vw - half - 4), y: ex.y - ex.r - 16 - slot * 21, text, color: C.sell, size: 13, dur: 3600, strong: true, slot }, 900);
+            const text = `${p.ticker} HALTED · ${vd(p.finalSpotBeforeHalt)} → V$0`, at = exchangeSpot(text, 13, 4500);
+            pop({ kind: "pill", x: at.x, y: at.y, text, color: C.sell, size: 13, dur: 3600, strong: true, slot: at.slot }, 900);
             break;
           }
           default: break;
@@ -601,13 +681,13 @@ export default function SwarmGraph(): ReactElement {
   for (const e of metricEdges) {
     const c = L.curve(e.from, e.to);
     if (!c) continue;
-    const col = KIND_COLOR[e.kind], w = 1.3 + Math.min(2.8, Math.log2(e.count + 1) * 0.8), on = touches(e.from, e.to), strong = !!hover && on;
+    const col = KIND_COLOR[e.kind], w = 1.7 + Math.min(3, Math.log2(e.count + 1) * 0.9), on = touches(e.from, e.to), strong = !!hover && on;
     const m = curveAt(c, 0.5), label = String(e.count), bw = Math.max(17, tw(label, 11.5, 800) + 9);
     edgeEls.push(
       <g key={`e-${e.from}-${e.to}-${e.kind}`} className={on ? undefined : "sg-dim"}>
-        <path className="sg-edge" d={curvePath(c)} stroke={col} strokeWidth={r1(w * 2.6)} strokeOpacity={strong ? 0.2 : 0.09} />
-        <path className="sg-edge" d={curvePath(c)} stroke={col} strokeWidth={r1(w)} strokeOpacity={strong ? 0.95 : 0.5} />
-        <path className="sg-edge-flow" d={curvePath(c)} stroke="#ffffff" strokeWidth={r1(w * 0.9)} strokeOpacity={0.85} strokeDasharray="1.5 16.5" />
+        <path className="sg-edge" d={curvePath(c)} stroke={col} strokeWidth={r1(w * 3)} strokeOpacity={strong ? 0.26 : 0.13} />
+        <path className="sg-edge" d={curvePath(c)} stroke={col} strokeWidth={r1(w)} strokeOpacity={strong ? 1 : 0.62} />
+        <path className="sg-edge-flow" d={curvePath(c)} stroke="#ffffff" strokeWidth={r1(w)} strokeOpacity={0.9} strokeDasharray="2 16" />
         <path d={arrowPath(c, 7)} fill={col} fillOpacity={strong ? 1 : 0.8} />
         <g transform={`translate(${r1(m.x)} ${r1(m.y)})`}>
           <rect x={-bw / 2} y={-8.5} width={bw} height={17} rx={8.5} fill={C.glass} stroke={col} strokeWidth={1.3} />
@@ -622,8 +702,9 @@ export default function SwarmGraph(): ReactElement {
     const m = curveAt(c, 0.5), label = `${count}${tradeCounts.partial ? "+" : ""}`, bw = Math.max(17, tw(label, 11.5, 800) + 9), on = touches(id, EXCHANGE);
     edgeEls.push(
       <g key={`t-${id}`} className={on ? undefined : "sg-dim"}>
-        <path className="sg-edge" d={curvePath(c)} stroke={C.mint} strokeWidth={1.6} strokeOpacity={0.5} />
-        <path className="sg-edge-flow" d={curvePath(c)} stroke="#ffffff" strokeWidth={1.4} strokeOpacity={0.8} strokeDasharray="1.5 16.5" />
+        <path className="sg-edge" d={curvePath(c)} stroke={C.mint} strokeWidth={6} strokeOpacity={0.12} />
+        <path className="sg-edge" d={curvePath(c)} stroke={C.mint} strokeWidth={2} strokeOpacity={0.62} />
+        <path className="sg-edge-flow" d={curvePath(c)} stroke="#ffffff" strokeWidth={2} strokeOpacity={0.9} strokeDasharray="2 16" />
         <path d={arrowPath(c, 7)} fill={C.mint} fillOpacity={0.8} />
         <g transform={`translate(${r1(m.x)} ${r1(m.y)})`}>
           <rect x={-bw / 2} y={-8.5} width={bw} height={17} rx={8.5} fill={C.glass} stroke={C.mint} strokeWidth={1.3} />
@@ -634,17 +715,20 @@ export default function SwarmGraph(): ReactElement {
   }
   // pursuit and investigation, straight from each officer's live activity
   const chaseEls: ReactNode[] = [];
+  const labelled = new Set<string>();
   for (const n of npcs) {
     if ((n.activity !== "PURSUE" && n.activity !== "INVESTIGATE") || !n.targetCharacterId) continue;
     const c = L.curve(n.id, n.targetCharacterId);
     if (!c) continue;
-    const hot = n.activity === "PURSUE", m = curveAt(c, 0.5);
+    const hot = n.activity === "PURSUE", m = curveAt(c, 0.7), tagKey = `${n.targetCharacterId}:${n.activity}`;
+    const tag = (hot || L.detail) && !labelled.has(tagKey);
+    if (tag) labelled.add(tagKey);
     chaseEls.push(
       <g key={`p-${n.id}`}>
         {hot && <path d={curvePath(c)} fill="none" stroke={C.wanted} strokeOpacity={0.2} strokeWidth={8} strokeLinecap="round" />}
         <path className={hot ? "sg-chase" : "sg-probe"} d={curvePath(c)} stroke={hot ? C.wanted : "#ffb347"} strokeWidth={hot ? 2.6 : 1.5} strokeOpacity={hot ? 1 : 0.75} strokeDasharray={hot ? "7 6" : "2 11"} />
         <path d={arrowPath(c, hot ? 9 : 7)} fill={hot ? C.wanted : "#ffb347"} />
-        {(hot || L.detail) && <g transform={`translate(${r1(m.x)} ${r1(m.y)})`}><Pill text={hot ? "PURSUIT" : "INVESTIGATING"} color={hot ? C.wanted : "#ffb347"} size={10.5} strong={hot} /></g>}
+        {tag && <g transform={`translate(${r1(m.x)} ${r1(m.y)})`}><Pill text={hot ? "PURSUIT" : "INVESTIGATING"} color={hot ? C.wanted : "#ffb347"} size={10.5} strong={hot} /></g>}
       </g>,
     );
   }
@@ -692,24 +776,26 @@ export default function SwarmGraph(): ReactElement {
         <text x={x + 19} y={y1} dy=".36em" fontSize={fs} fontWeight={700} letterSpacing=".05em" fill={C.soft}>{k}</text></g>);
       x += 19 + tw(k, fs, 700, 0.05) + 13;
     }
-    if (vw - x > 150) {
+    const extraW = 11 + tw("BUY", fs, 700, 0.05) + 9 + 11 + tw("SELL", fs, 700, 0.05) + 13;
+    if (x + extraW <= vw - pad) {
       legendEls.push(<g key="l-buy"><circle cx={x + 4} cy={y1} r={3.6} fill={C.buy} /><text x={x + 11} y={y1} dy=".36em" fontSize={fs} fontWeight={700} letterSpacing=".05em" fill={C.soft}>BUY</text></g>);
       x += 11 + tw("BUY", fs, 700, 0.05) + 9;
       legendEls.push(<g key="l-sell"><circle cx={x + 4} cy={y1} r={3.6} fill={C.sell} /><text x={x + 11} y={y1} dy=".36em" fontSize={fs} fontWeight={700} letterSpacing=".05em" fill={C.soft}>SELL</text></g>);
       x += 11 + tw("SELL", fs, 700, 0.05) + 13;
     }
-    if (L.legendRows === 2 ? vw - x > 96 : true) {
+    if (x + 22 + tw("PURSUIT", fs, 700, 0.05) <= vw - pad) {
       legendEls.push(<g key="l-chase"><line x1={x} x2={x + 16} y1={y1} y2={y1} stroke={C.wanted} strokeWidth={2.2} strokeDasharray="5 3.5" strokeLinecap="round" /><text x={x + 22} y={y1} dy=".36em" fontSize={fs} fontWeight={700} letterSpacing=".05em" fill={C.soft}>PURSUIT</text></g>);
       x += 22 + tw("PURSUIT", fs, 700, 0.05) + 13;
     }
     // decision sources: second row, or right-aligned on the same row when there is room
     const items = LEGEND_SOURCES.map((s) => srcStyle(s));
     const widths = items.map((s) => 17 + tw(s.word, fs, 700, 0.05) + 12);
-    const prefix = "DECIDED BY", pw = tw(prefix, 10.5, 700, 0.1) + 9;
-    const total = widths.reduce((a, b) => a + b, 0) - 12 + pw;
+    const itemsW = widths.reduce((a, b) => a + b, 0) - 12;
+    const prefix = itemsW + tw("DECIDED BY", 10.5, 700, 0.1) + 9 + pad * 2 + 4 <= vw ? "DECIDED BY" : "", pw = prefix ? tw(prefix, 10.5, 700, 0.1) + 9 : 0;
+    const total = itemsW + pw;
     const y2 = L.legendRows === 2 ? rowY(1) : y1;
     let sx = L.legendRows === 2 ? pad + 2 : Math.max(x + 8, vw - pad - 2 - total);
-    legendEls.push(<text key="l-pre" x={sx} y={y2} dy=".36em" fontSize={10.5} fontWeight={700} letterSpacing=".1em" fill={C.dim}>{prefix}</text>);
+    if (prefix) legendEls.push(<text key="l-pre" x={sx} y={y2} dy=".36em" fontSize={10.5} fontWeight={700} letterSpacing=".1em" fill={C.dim}>{prefix}</text>);
     sx += pw;
     items.forEach((s, i) => {
       const dash = s.cls === "scripted" || s.cls === "fallback" ? "2.6 2" : undefined;
@@ -745,9 +831,10 @@ export default function SwarmGraph(): ReactElement {
         {sel && <circle className="sg-sel" r={g.r + 11} strokeWidth={1.7} strokeDasharray="5 6" />}
         {pend && (
           <g>
-            <circle className="sg-think-a" r={g.r + 6.5} stroke={C.pending} strokeWidth={2.4} strokeDasharray={`${r1((g.r + 6.5) * 0.9)} ${r1((g.r + 6.5) * 1.194)}`} />
-            <circle className="sg-think-b" r={g.r + 10.5} stroke={C.pending} strokeOpacity={0.55} strokeWidth={1.2} strokeDasharray="2 5" />
-            <g className="sg-orbit"><circle cx={g.r + 6.5} r={2.7} fill="#ffffff" /></g>
+            <circle r={g.r + 6.5} fill="none" stroke={C.pending} strokeOpacity={0.2} strokeWidth={8} />
+            <circle className="sg-think-a" r={g.r + 6.5} stroke={C.pending} strokeWidth={3.2} strokeDasharray={`${r1((g.r + 6.5) * 0.9)} ${r1((g.r + 6.5) * 1.194)}`} />
+            <circle className="sg-think-b" r={g.r + 11.5} stroke={C.pending} strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="2 5" />
+            <g className="sg-orbit"><circle cx={g.r + 6.5} r={3.2} fill="#ffffff" /><circle cx={-(g.r + 6.5)} r={2.2} fill="#ffffff" fillOpacity={0.8} /></g>
           </g>
         )}
         {conf !== null && ss && (
@@ -887,7 +974,7 @@ export default function SwarmGraph(): ReactElement {
           <linearGradient id={`${uid}-title`} x1={0} x2={1} y1={0} y2={0}><stop offset={0} stopColor="#ff4fa3" /><stop offset={1} stopColor="#2ff3e0" /></linearGradient>
           <radialGradient id={`${uid}-glass`} cx={0.34} cy={0.28} r={0.95}><stop offset={0} stopColor="#2c3060" /><stop offset={0.55} stopColor="#141733" /><stop offset={1} stopColor="#080915" /></radialGradient>
           {HALOS.map(([k, col]) => (
-            <radialGradient key={k} id={haloId(k)}><stop offset={0.3} stopColor={col} stopOpacity={0.42} /><stop offset={0.62} stopColor={col} stopOpacity={0.12} /><stop offset={1} stopColor={col} stopOpacity={0} /></radialGradient>
+            <radialGradient key={k} id={haloId(k)}><stop offset={0.28} stopColor={col} stopOpacity={0.55} /><stop offset={0.6} stopColor={col} stopOpacity={0.16} /><stop offset={1} stopColor={col} stopOpacity={0} /></radialGradient>
           ))}
         </defs>
         <rect width={r1(vw)} height={r1(vh)} fill={`url(#${uid}-dots)`} />

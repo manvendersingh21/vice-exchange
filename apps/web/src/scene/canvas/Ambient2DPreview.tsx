@@ -1,13 +1,13 @@
 // Dev-only preview for the Ambient2D layer (never imported by the app).
 //
-//   /src/scene/canvas/Ambient2DPreview.html             the real CanvasCity with the layer injected, busy mock feed
-//     ?spectator=1    whole map instead of the follow camera        ?ambient=0   same scene without the layer (A/B)
-//     ?reduced=1      calm variant                                   ?quality=low
-//     ?warp=40        start the scenery 40 s in                      ?stats=1     draw cost overlay
-//   /src/scene/canvas/Ambient2DPreview.html?solo=1&x=47&z=62&s=16   static map + layer only, fixed camera
-//
-// CanvasCity is not edited: this page wraps the canvas context so the layer is drawn at the two spots where the
-// integrator will call it (right after the static city, and at the end of the frame).
+//   /src/scene/canvas/Ambient2DPreview.html             the real CanvasCity (which mounts the layer itself) fed
+//                                                        with a busy mock story: job, gossip, report, relay,
+//                                                        trade, bulletin, capture. ?spectator=1 shows the whole map.
+//   /src/scene/canvas/Ambient2DPreview.html?solo=1      static map + layer only, fixed camera, for judging the art:
+//     ?x=47&z=62&s=16  camera centre (m) and px per metre           ?ambient=0   map without the layer (A/B)
+//     ?warp=40         start the scenery 40 s in                    ?freeze=1    hold it at the warp time
+//     ?reduced=1       calm variant                                 ?quality=low
+//     ?keep=0          open every lane (no keep-clear posts)        ?stats=1     draw cost overlay
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CITY_MAP, MISSION_SPOTS } from "@vice/contracts";
@@ -21,10 +21,12 @@ const Q = new URLSearchParams(location.search);
 const num = (k: string, d: number): number => (Q.has(k) && Number.isFinite(Number(Q.get(k))) ? Number(Q.get(k)) : d);
 const STATS = Q.has("stats");
 
-function makeAmbient(): Ambient {
+const FREEZE = Q.has("freeze");
+function makeAmbient(keep: boolean): Ambient {
   const ambient = createAmbient(CITY_MAP, num("seed", 42), {
     reducedMotion: Q.has("reduced") ? true : undefined,
     quality: Q.get("quality") === "low" ? "low" : "high",
+    keepClear: keep ? undefined : [],
   });
   for (let i = 0, n = Math.round(num("warp", 0) * 60); i < n; i++) ambient.update(1000 / 60);
   return ambient;
@@ -45,7 +47,7 @@ function Solo() {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current!, ctx = canvas.getContext("2d")!;
-    const map: MapView = CITY_MAP, ambient = makeAmbient();
+    const map: MapView = CITY_MAP, ambient = makeAmbient(Q.get("keep") !== "0");
     const layer = document.createElement("canvas");
     layer.width = map.width * 12; layer.height = map.height * 12;
     drawStaticCity(layer.getContext("2d")!, map, 12);
@@ -58,7 +60,8 @@ function Solo() {
       if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) { canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr); }
       const fit = Math.min(w / map.width, h / map.height);
       view.scale = num("s", fit); view.x = num("x", map.width / 2); view.z = num("z", map.height / 2); view.width = w; view.height = h;
-      ambient.update(now - last); last = now; frames++;
+      if (!FREEZE) ambient.update(now - last);
+      last = now; frames++;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = PALETTE.void; ctx.fillRect(0, 0, w, h);
       ctx.drawImage(layer, (0 - view.x) * view.scale + w / 2, (0 - view.z) * view.scale + h / 2, map.width * view.scale, map.height * view.scale);
@@ -90,7 +93,6 @@ const MISSIONS: MissionView[] = [{ id: "m1", ...MISSION_SPOTS[1]!, status: "AVAI
 
 function City() {
   const spectator = Q.has("spectator");
-  const host = useRef<HTMLDivElement | null>(null);
   const [tick, setTick] = useState<WorldTick | null>(null);
   const [events, setEvents] = useState<GameEvent[]>([]);
   const chars = useRef([chr("c1", "Ace", "OUTLAW", "ACE-01", 47, 60), chr("c2", "Rio", "HUNTER", null, 58, 52), chr("c3", "Nova", "OUTLAW", "NOV-02", 62, 40)]);
@@ -134,41 +136,8 @@ function City() {
     return () => clearInterval(id);
   }, []);
 
-  // inject the layer exactly where the integrator will call it
-  useEffect(() => {
-    if (Q.get("ambient") === "0") return;
-    const canvas = host.current!.querySelector("canvas")!;
-    const ctx = canvas.getContext("2d")!;
-    const map: MapView = CITY_MAP, ambient = makeAmbient();
-    const view: AmbientView = { x: 0, z: 0, scale: 1, width: 0, height: 0 };
-    const draw = ctx.drawImage.bind(ctx) as (...a: unknown[]) => void;
-    let inside = false, last = performance.now(), frames = 0, raf = 0;
-    (ctx as unknown as { drawImage: (...a: unknown[]) => void }).drawImage = (...a: unknown[]) => {
-      draw(...a);
-      const img = a[0];
-      if (inside || a.length !== 5 || !(img instanceof HTMLCanvasElement) || img.width !== map.width * 12) return;
-      const now = performance.now(), r = canvas.getBoundingClientRect();
-      view.width = Math.max(1, Math.floor(r.width)); view.height = Math.max(1, Math.floor(r.height));
-      view.scale = (a[3] as number) / map.width;
-      view.x = (view.width / 2 - (a[1] as number)) / view.scale; view.z = (view.height / 2 - (a[2] as number)) / view.scale;
-      inside = true;
-      ambient.update(now - last); last = now; frames++;
-      timed(() => ambient.drawUnder(ctx, view));
-      inside = false;
-    };
-    const over = () => {
-      raf = requestAnimationFrame(over);
-      inside = true;
-      timed(() => ambient.drawOver(ctx, view));
-      stats(ctx, frames);
-      inside = false;
-    };
-    raf = requestAnimationFrame(over);
-    return () => { cancelAnimationFrame(raf); delete (ctx as unknown as { drawImage?: unknown }).drawImage; };
-  }, []);
-
   return (
-    <div ref={host} style={{ width: "100%", height: "100%" }}>
+    <div style={{ width: "100%", height: "100%" }}>
       <CanvasCity map={CITY_MAP} characters={chars.current} npcs={NPCS} missions={MISSIONS} listings={[]} tick={tick} events={events}
         youCharacterId={spectator ? null : "c1"} selectedId={Q.get("select")} onSelect={() => {}} />
     </div>
