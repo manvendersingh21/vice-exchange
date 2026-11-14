@@ -389,6 +389,8 @@ export class RoomEngine implements WorldPort {
         if (cmd.type === "demo.reset") { this.reset(cmd.seed); return ack(id, { runId: this.state.runId }); }
         if (cmd.type === "demo.setMode") { this.setMode(cmd.mode); return ack(id, { mode: cmd.mode }); }
         if (cmd.type === "demo.runExperiment") {
+          // Experiments spend real provider budget and hold the single runner: creating a room is not enough to start one.
+          if (!this.trusted.has(player.id)) return fail(id, "FORBIDDEN", "Experiments need the director secret or the server's own machine");
           const exp = this.deps.onRunExperiment?.(this, cmd.durationSec ?? 45) ?? null;
           return exp ? ack(id, { experimentId: exp.id }) : fail(id, "INTERNAL", "Experiment runner unavailable or already running");
         }
@@ -431,6 +433,9 @@ export class RoomEngine implements WorldPort {
     }
     this.dirty.snapshot = true;
   }
+  /** Players who proved more than room membership: joined from the server's own machine or with the director secret. */
+  private trusted = new Set<string>();
+  setTrusted(playerId: string, trusted: boolean): void { if (trusted) this.trusted.add(playerId); else this.trusted.delete(playerId); }
   /** old playerId -> new playerId after the latest reset (transport re-binds sockets with this). */
   readonly playerRemap = new Map<string, string>();
 

@@ -101,7 +101,10 @@ export class RoomManager {
     const engine = room.engine;
     const humans = Object.values(engine.state.players).filter((p) => !p.isBot);
     const secret = this.secretOk(cmd.directorSecret);
-    const done = (playerId: string) => ({ ok: true as const, id, room, playerId, result: this.result(room!, playerId) });
+    const done = (playerId: string) => {
+      room!.engine.setTrusted(playerId, secret || (local && !socketId.startsWith("bridge:")));
+      return { ok: true as const, id, room, playerId, result: this.result(room!, playerId) };
+    };
 
     if (cmd.type === "room.join") {
       const byToken = cmd.sessionToken ? humans.find((p) => p.sessionToken === cmd.sessionToken) : undefined;

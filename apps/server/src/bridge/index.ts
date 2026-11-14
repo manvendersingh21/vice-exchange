@@ -22,6 +22,13 @@ const TICK_MS = 100;
 const STATE_EVERY_TICKS = 5;
 const RATE = { perSecond: 60, burst: 120 };
 const MAX_FRAME_BYTES = 8 * 1024;
+const MAX_SESSIONS = 16;
+// Kept local (not imported from transport/app) because app.ts loads this module dynamically.
+const PRIVATE_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[a-z0-9-]+\.local)$/i;
+export function bridgeOriginAllowed(origin: string | undefined): boolean {
+  if (!origin) return true;
+  try { return PRIVATE_HOST.test(new URL(origin).hostname); } catch { return false; }
+}
 
 interface Session {
   id: number;
@@ -104,6 +111,9 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
     let pathname = "";
     try { pathname = new URL(req.url ?? "", "http://localhost").pathname; } catch { return; }
     if (pathname !== BRIDGE_PATH) return; // not ours: Socket.IO (or nothing) handles it
+    // Browsers do not apply CORS to WebSockets, so enforce the same allow-list as Socket.IO here:
+    // a page on a public origin must not be able to play as a bridge client. Native clients send no Origin.
+    if (!bridgeOriginAllowed(req.headers.origin) || sessions.size >= MAX_SESSIONS) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   }
   httpServer.on("upgrade", onUpgrade);

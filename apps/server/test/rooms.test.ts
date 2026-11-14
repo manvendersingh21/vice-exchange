@@ -207,4 +207,16 @@ describe("audit fixes", () => {
     expect(rooms.get(DEFAULT_ROOM_CODE)).toBeTruthy();
     expect(rooms.join({ type: "room.join", roomCode: code, nickname: "Ace", role: "OUTLAW", requestId: "mk-b" }, "sock-b").error?.code).toBe("ROOM_NOT_FOUND");
   });
+  it("a room creator from elsewhere cannot start an experiment; the server's own machine or the secret can", () => {
+    const { rooms } = setup("s3cret-director-token");
+    const make = (i: number, local: boolean, directorSecret?: string) => {
+      const r = rooms.join({ type: "room.create", nickname: `D${i}`, role: "SPECTATOR", requestId: `ex-${i}`, directorSecret }, `sock-ex-${i}`, local);
+      expect(r.result!.isDirector).toBe(true);
+      return r.room!.engine.dispatch(r.playerId!, { type: "demo.runExperiment", commandId: `exp-cmd-000${i}` });
+    };
+    expect(make(1, false).error).toMatchObject({ code: "FORBIDDEN" });
+    // No runner is attached in this unit setup, so an allowed request gets past the gate and reports that instead.
+    expect(make(2, true).error?.code).toBe("INTERNAL");
+    expect(make(3, false, "s3cret-director-token").error?.code).toBe("INTERNAL");
+  });
 });

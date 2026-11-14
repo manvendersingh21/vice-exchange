@@ -210,27 +210,44 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     for (let k = 0; k < 3; k++) {
       const M = options[k]!;
       if (M < 0) continue;
-      succ[L * 3 + k] = M; ckind[L * 3 + k] = k;
       const ax = linkX1[L]!, az = linkZ1[L]!, bx = lx0[M]!, bz = lz0[M]!;
-      if (k === 0) { ccx[L * 3] = (ax + bx) / 2; ccz[L * 3] = (az + bz) / 2; clen[L * 3] = Math.hypot(bx - ax, bz - az); continue; }
-      const qx = d % 2 === 0 ? bx : ax, qz = d % 2 === 0 ? az : bz;   // where the two lane lines cross
-      ccx[L * 3 + k] = qx; ccz[L * 3 + k] = qz;
-      let len = 0, px = ax, pz = az;
+      // straight across uses the midpoint as its control point, so one curve formula covers every movement
+      const qx = k === 0 ? (ax + bx) / 2 : d % 2 === 0 ? bx : ax, qz = k === 0 ? (az + bz) / 2 : d % 2 === 0 ? az : bz;
+      let len = 0, px = ax, pz = az, blocked = false;
       for (let s = 1; s <= 16; s++) {
         const u = s / 16, w = 1 - u;
         const x = w * w * ax + 2 * w * u * qx + u * u * bx, z = w * w * az + 2 * w * u * qz + u * u * bz;
         len += Math.hypot(x - px, z - pz); px = x; pz = z;
+        for (const p of keepClear) if (Math.hypot(p.x - x, p.z - z) < 1.9) blocked = true;
       }
-      clen[L * 3 + k] = len;
+      if (blocked) continue;                               // this movement would cross a keep-clear spot
+      succ[L * 3 + k] = M; ckind[L * 3 + k] = k;
+      ccx[L * 3 + k] = qx; ccz[L * 3 + k] = qz; clen[L * 3 + k] = len;
     }
     // the lane that arrives head-on (a left turner on a through road gives way to it)
     if (straight >= 0) for (let M = 0; M < linkCount; M++) if (linkNode[M] === n && linkDir[M] === (d + 2) % 4) lopp[L] = M;
   }
-  let usable = linkCount > 0;
-  for (let L = 0; L < linkCount; L++) if (succ[L * 3]! < 0 && succ[L * 3 + 1]! < 0 && succ[L * 3 + 2]! < 0) usable = false;
+  // lanes left without any way out are closed, and so is every movement into them
+  const linkAlive = new Uint8Array(maxLinks);
+  for (let L = 0; L < linkCount; L++) linkAlive[L] = 1;
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let L = 0; L < linkCount; L++) {
+      if (!linkAlive[L]) continue;
+      let any = false;
+      for (let k = 0; k < 3; k++) {
+        const M = succ[L * 3 + k]!;
+        if (M >= 0 && !linkAlive[M]) succ[L * 3 + k] = -1;
+        if (succ[L * 3 + k]! >= 0) any = true;
+      }
+      if (!any) { linkAlive[L] = 0; changed = true; }
+    }
+  }
+  const open: number[] = [];
+  for (let L = 0; L < linkCount; L++) if (linkAlive[L]) open.push(L);
 
   // ---- vehicles ----
-  const carCount = usable ? Math.max(0, Math.min(wantedCars, Math.floor(linkCount * 1.2))) : 0;
+  const carCount = open.length ? Math.max(0, Math.min(wantedCars, Math.floor(open.length * 1.2))) : 0;
   const link = new Int16Array(carCount), nextK = new Uint8Array(carCount), rngState = new Uint32Array(carCount);
   const s = new Float32Array(carCount), v = new Float32Array(carCount), v0 = new Float32Array(carCount);
   const cx = new Float32Array(carCount), cz = new Float32Array(carCount), cang = new Float32Array(carCount);
