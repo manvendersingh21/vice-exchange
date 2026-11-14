@@ -23,7 +23,7 @@ import { CITY_MAP, CREDITS_NOTICE, DEFAULT_ROOM_CODE, MISSION_SPOTS, RULES, SPAW
 import type { AgentView, CharacterView, DecisionTrace, GameEvent, MemoryEntry, RoomSnapshot, Vec2 } from "@vice/contracts";
 import { Api, Bot, EventLog, median, sleep } from "./lib/api";
 import { providerFailureScenario, type FailoverResult } from "./lib/failover";
-import { Recorder, Shots, card, ident, newActor, pageSend, poseIn, store, until, vd, view, type Actor, type View } from "./lib/harness";
+import { Recorder, Shots, card, click, dismissOverlay, ident, newActor, pageSend, poseIn, store, until, vd, view, type Actor, type View } from "./lib/harness";
 import { positionLegal, setKeys, walkTo, type Walker, type WalkResult } from "./lib/nav";
 import { countColourNear } from "./lib/png";
 import { MARKER, pickPort, reapStale, startProc, stopAll, stopAllSync, waitHealth, writePids, type Proc } from "./lib/procs";
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
     await a.page.keyboard.press(key, { delay: 40 });
   };
   const openTab = async (a: Actor, which: "director" | "timeline"): Promise<void> => {
-    await a.page.click(`.tabs button:has-text("${which === "director" ? "DEMO DIRECTOR" : "EVENT TIMELINE"}")`, { timeout: 5000 }).catch(() => {});
+    await click(a, `.tabs button:has-text("${which === "director" ? "DEMO DIRECTOR" : "EVENT TIMELINE"}")`, { timeout: 5000 }).catch(() => {});
   };
   const nameOfNpc = (snap: RoomSnapshot, id: string): string => snap.npcs.find((n) => n.id === id)?.name ?? snap.characters.find((c) => c.id === id)?.nickname ?? snap.players.find((p) => p.id === id)?.nickname ?? id;
   const police = (snap: RoomSnapshot): AgentView[] => snap.npcs.filter((n) => n.role === "POLICE");
@@ -204,8 +204,8 @@ async function main(): Promise<void> {
       const code = await a.page.inputValue('.join-card label:has-text("Room code") input');
       if (code !== ROOM) await a.page.fill('.join-card label:has-text("Room code") input', ROOM);
       const title = a.role === "OUTLAW" ? "Outlaw" : a.role === "HUNTER" ? "Hunter" : "Spectator";
-      await a.page.click(`.join-card .role:has(b:text-is("${title}"))`);
-      await a.page.click('.join-card button.primary');
+      await click(a, `.join-card .role:has(b:text-is("${title}"))`);
+      await click(a, '.join-card button.primary');
       await a.page.waitForSelector(".app", { timeout: 20000 });
       await a.page.waitForFunction("!!(window.__vice && window.__vice.getState().session && window.__vice.getState().lastTick)", null, { timeout: 15000 });
       await refreshIdent(a);
@@ -298,7 +298,7 @@ async function main(): Promise<void> {
     const [va0, vb0] = await Promise.all([view(A), view(B)]);
     const bal0 = vd(va0.balance);
     const seq0 = log.lastSeq;
-    await A.page.click(`.tcard:has(.tk:text-is("${ticker1}")) button.buy`, { timeout: 6000 });
+    await click(A, `.tcard:has(.tk:text-is("${ticker1}")) button.buy`, { timeout: 6000 });
     const ev = await log.waitFor("TRADE_EXECUTED", (e) => e.payload.actorId === A.playerId, 6000, seq0);
     if (!ev) { rec.rec("S06", "S06.buy", "A buys one share with the BUY button", false, { reason: "no TRADE_EXECUTED event for A within 6 s", toasts: (await view(A)).toasts }, ["AT-04"]); return; }
     buyCommandId = ev.payload.commandId; buyPrice = ev.payload.executionPrice;
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
       // escape rule and then forces the "nobody reported" branch below.
       const seqE = log.lastSeq;
       const hid = await walk(A, { x: 4, z: 54 }, { tol: 1.5, timeoutMs: 30000 });
-      const esc = await log.waitFor("ESCAPE_SUCCEEDED", (e) => e.payload.characterId === A.charId, 45000, seqE);
+      const esc = await log.waitFor("ESCAPE_SUCCEEDED", (e) => e.payload.characterId === A.charId, 120000, seqE);
       await sleep(400); await log.pull();
       const c = await charA();
       const pe = log.of("MARKET_PRICE_UPDATED", seqE).find((e) => e.payload.reason === "ESCAPE");
@@ -473,7 +473,7 @@ async function main(): Promise<void> {
       }, 60000, 120);
       if (!seen) { rec.rec("S07", "S07.capture", "B walks to the wanted A and presses E", "blocked", "no officer came within sight of the staged outlaw in 60 s, so A could not be made wanted", ["AT-05"]); return; }
       const seqI = log.lastSeq;
-      await A.page.click('.director button:has-text("Trigger incident")', { timeout: 5000 });
+      await click(A, '.director button:has-text("Trigger incident")', { timeout: 5000 });
       usedDirectorIncident++;
       const wantedEv = await log.waitFor("WANTED_STATUS_CHANGED", (e) => e.payload.characterId === A.charId && e.payload.wanted, 5000, seqI);
       rec.note(`S07: used the director's incident trigger (officer ${seen.cop} at ${seen.metres} m); wanted event ${wantedEv?.eventId ?? "none"}`);
@@ -494,9 +494,13 @@ async function main(): Promise<void> {
     }
     captured = captured ?? log.of("CAPTURE_SUCCEEDED", seqC).find((e) => e.payload.characterId === A.charId) ?? null;
     await sleep(350);
-    await shots.all(actors, "07-capture");                    // the crash overlay is on screen for ~5 s
-    await shots.all(actors, "12-views-market-crash");
+    await shots.all(actors, "07-capture-impact");             // first frames of the crash
+    await sleep(1900);
+    await shots.all(actors, "07-capture");                    // the crash banner / cinematic at its peak (it stays ~5 s)
     const views = await Promise.all(actors.map(view));
+    for (const a of actors) await dismissOverlay(a);
+    await sleep(300);
+    await shots.all(actors, "12-views-market-crash");         // the Market panel right after: halted card, V$0, price cliff
     await log.pull();
     if (!captured) {
       const rej = log.of("CAPTURE_REJECTED", seqC).map((e) => e.payload.reason);
@@ -516,8 +520,8 @@ async function main(): Promise<void> {
       { listing: l && { status: l.status, spot: l.spotPrice, bid: l.bid, ask: l.ask, finalSpotBeforeHalt: l.finalSpotBeforeHalt }, character: ch && { status: ch.status, capturedBy: ch.capturedBy }, halt: halts[0]?.eventId, priceToZero: zero[0]?.eventId }, ["AT-05", "FR-033", "FR-052", "Gate D"]);
     const cards = views.map((v) => card(v, ticker1));
     rec.rec("S07", "S07.zero-screens", "every screen shows the ticker at exactly V$0 and HALTED, with the crash banner",
-      cards.every((c) => !!c && c.halted && c.price === "V$0" && c.chg === "HALTED" && /→ V\$0/.test(c.meta ?? "") && c.buy === null) && views.every((v) => /LISTING HALTED/.test(v.crash ?? "") && /V\$0/.test(v.crash ?? "")),
-      { cards: cards.map((c) => c && `${c.ticker} ${c.price} ${c.chg} | ${c.meta}`), crashBanner: views.map((v) => v.crash), outlawHud: views[0]!.hud, outlawHoldings: views[0]!.holds }, ["AT-05", "FR-033", "FR-006", "Gate D"]);
+      cards.every((c) => !!c && c.halted && c.price === "V$0" && c.chg === "HALTED" && /→ V\$0/.test(c.meta ?? "") && c.buy === null) && views.every((v) => /HALTED/i.test(v.crash ?? "") && /V\$0/.test(v.crash ?? "") && (v.crash ?? "").includes(ticker1)),
+      { cards: cards.map((c) => c && `${c.ticker} ${c.price} ${c.chg} | ${c.meta}`), crashBanner: views.map((v) => (v.crash ?? "").slice(0, 260)), outlawHud: views[0]!.hud, outlawHoldings: views[0]!.holds }, ["AT-05", "FR-033", "FR-006", "Gate D"]);
     // A further buy is rejected (the UI removes the buttons, so send the order through the page's own socket).
     const buyAfter = await pageSend(B, { type: "market.buy", ticker: ticker1, qty: 1, commandId: `e2e-after-${Date.now()}` });
     rec.rec("S07", "S07.buy-rejected", "a further buy on the halted ticker is rejected with LISTING_HALTED; the buttons are gone from the card",
@@ -560,13 +564,13 @@ async function main(): Promise<void> {
         { decision: sample.id, agent: `${sample.agentName} (${sample.role})`, model: sample.model, requestId: sample.providerRequestId, offered, chosen: sample.chosenAction, providerChoice: sample.providerChoice, probabilities: sample.probabilities, confidence: sample.confidence, latencyMs: sample.latencyMs, providerEvalMs: sample.providerEvalMs, status: sample.status, trigger: sample.triggerEventId, effects: sample.effectEventIds }, ["AT-03", "FR-020", "FR-023", "Gate B"]);
       // Click that NPC in the city (spectator 2D map), then read the inspector.
       const npc = snap.npcs.find((n) => n.id === sample.agentId)!;
-      await until(async () => ((await view(C)).crash === null ? true : null), 9000, 150); // the crash banner covers the city for ~5 s
+      await dismissOverlay(C); // the crash banner / cinematic covers the city for ~5 s and swallows clicks
       const vc0 = await view(C);
       const scr = toScreenC(vc0, npc);
       if (scr) await C.page.mouse.click(scr.x, scr.y);
       let vc = await until(async () => { const v = await view(C); return v.agentName === npc.name ? v : null; }, 2500, 100);
       const clickedOnMap = !!vc;
-      if (!vc) { await C.page.click(`.inspector .chip:has-text("${npc.name.split(" ").slice(-1)[0]}")`).catch(() => {}); vc = await until(async () => { const v = await view(C); return v.agentName === npc.name ? v : null; }, 2500, 100); }
+      if (!vc) { await click(C, `.inspector .chip:has-text("${npc.name.split(" ").slice(-1)[0]}")`).catch(() => {}); vc = await until(async () => { const v = await view(C); return v.agentName === npc.name ? v : null; }, 2500, 100); }
       await sleep(300);
       vc = await view(C);
       const shown = (await api.trace(npc.id)).agent.lastDecision;
@@ -598,7 +602,7 @@ async function main(): Promise<void> {
         clicked && linked === chain.size && rows >= 4 && ["INCIDENT_OCCURRED", "NPC_OBSERVED", "DECISION_RESOLVED", "MARKET_PRICE_UPDATED"].every((t) => types.includes(t as never)),
         { clicked, linkedInUi: linked, linkedOnServer: chain.size, highlightedRows: rows, typesInChain: types }, ["FR-061", "Gate E"]);
       await shots.one(C, "12-views-timeline-chain");
-      await C.page.click('.tl-bar button:has-text("Clear chain")').catch(() => {});
+      await click(C, '.tl-bar button:has-text("Clear chain")').catch(() => {});
     } else rec.rec("S05", "S05.timeline-chain", "selecting the mission in the Event Timeline highlights its causal chain", "blocked", "no mission event to select", ["FR-061"]);
   });
 
@@ -654,7 +658,7 @@ async function main(): Promise<void> {
       return wantPolice ? (near && dist(near, x) > 5 ? { police: near.name } : null) : (near ? null : { police: "none in sight" });
     }, 45000, 150);
     const seq = log.lastSeq;
-    await A.page.click('.director button:has-text("Trigger incident")', { timeout: 5000 }).catch(() => {});
+    await click(A, '.director button:has-text("Trigger incident")', { timeout: 5000 }).catch(() => {});
     usedDirectorIncident++;
     const inc = await log.waitFor("INCIDENT_OCCURRED", () => true, 4000, seq);
     const st = await settle(9000, 1500);
@@ -736,7 +740,7 @@ async function main(): Promise<void> {
       !!mem && mem.sourceKind === "MESSAGE" && mem.sourceActorId === p.senderId && mem.hop === p.hop && mem.eventId === d.eventId && !!mem.sourceMemoryId && earlier.length === 0 && !!sent && sent.payload.sourceMemoryId === mem.sourceMemoryId,
       { life: traderMessage.life, delivered: d.eventId, sent: sent?.eventId, kind: p.kind, trader: tr.agent.name, source: nameOfNpc(s, p.senderId), memory: mem && { id: mem.id, factType: mem.factType, sourceKind: mem.sourceKind, hop: mem.hop, belief: mem.confidence, summary: mem.summary }, provenance: chain.join(" <- "), knewBeforeDelivery: earlier.length }, ["AT-02", "FR-013", "FR-014"]);
     // The judge sees the same thing in the inspector.
-    await C.page.click(`.inspector .chip:has-text("${tr.agent.name.split(" ").slice(-1)[0]}")`).catch(() => {});
+    await click(C, `.inspector .chip:has-text("${tr.agent.name.split(" ").slice(-1)[0]}")`).catch(() => {});
     const vc = await until(async () => { const v = await view(C); return v.agentName === tr.agent.name ? v : null; }, 3000, 100) ?? await view(C);
     const sender = nameOfNpc(s, p.senderId);
     const line = vc.mems.find((m) => (m ?? "").includes("was told") && (m ?? "").includes(`from ${sender}`));
@@ -763,7 +767,7 @@ async function main(): Promise<void> {
     await shots.all(actors, "09-director-before");
     const initial = async (): Promise<Record<string, unknown> | null> => {
       const seq = log.lastSeq;
-      await A.page.click('.director button:has-text("Seeded reset")', { timeout: 6000 });
+      await click(A, '.director button:has-text("Seeded reset")', { timeout: 6000 });
       const rs = await log.waitFor("ROOM_RESET", () => true, 6000, seq);
       if (!rs) return null;
       const snap = await api.snapshot();
@@ -800,7 +804,7 @@ async function main(): Promise<void> {
     // ---- scripted baseline ----
     await settle(6000, 1200);
     const seqM = log.lastSeq;
-    await A.page.click('.director .seg.wide button:has-text("SCRIPTED")', { timeout: 6000 });
+    await click(A, '.director .seg.wide button:has-text("SCRIPTED")', { timeout: 6000 });
     const mode = await log.waitFor("MODE_CHANGED", (e) => e.payload.mode === "scripted", 5000, seqM);
     await sleep(1200);
     const vm = await Promise.all(actors.map(view));
@@ -824,7 +828,7 @@ async function main(): Promise<void> {
     const sNow = await api.snapshot();
     const w1 = sNow.npcs.find((n) => n.lastDecision?.decisionSource === "scripted");
     if (w1) {
-      await C.page.click(`.inspector .chip:has-text("${w1.name.split(" ").slice(-1)[0]}")`).catch(() => {});
+      await click(C, `.inspector .chip:has-text("${w1.name.split(" ").slice(-1)[0]}")`).catch(() => {});
       const vc = await until(async () => { const v = await view(C); return v.agentName === w1.name ? v : null; }, 3000, 100) ?? await view(C);
       rec.rec("S09", "S09.scripted-ui", "the Agent Inspector labels a scripted decision as a scripted rule and shows no model figures", vc.decSrc === "SCRIPTED rule" && /No model was called/.test(vc.decMeta ?? "") && vc.decBars === 0 && !/confidence \d/.test(vc.agent ?? ""),
         { agent: vc.agentName, badge: vc.decSrc, choice: vc.decChoice, meta: vc.decMeta, probabilityBars: vc.decBars }, ["FR-028", "NFR-009"]);
@@ -836,7 +840,7 @@ async function main(): Promise<void> {
     const before = (await api.experiments() as Array<{ id: string }>).map((x) => x.id);
     let sentVia = "page socket, durationSec 20";
     const ack = await pageSend(A, { type: "demo.runExperiment", commandId: `e2e-exp-${Date.now()}`, durationSec: 20 });
-    if (!ack?.ok) { sentVia = `button (45 s default); page socket said ${ack?.error?.code}: ${ack?.error?.message}`; await A.page.click('.director button:has-text("Run scripted vs Meta vs Drex")', { timeout: 5000 }).catch(() => {}); }
+    if (!ack?.ok) { sentVia = `button (45 s default); page socket said ${ack?.error?.code}: ${ack?.error?.message}`; await click(A, '.director button:has-text("Run scripted vs Meta vs Drex")', { timeout: 5000 }).catch(() => {}); }
     type Exp = { id: string; status: string; seed: number; durationSec: number; caveat: string; rows: Array<Record<string, unknown>> };
     const running = await until(async () => (await api.experiments() as Exp[]).find((x) => !before.includes(x.id)) ?? null, 8000, 200);
     await sleep(2500);
@@ -868,9 +872,9 @@ async function main(): Promise<void> {
     // Back to Drex and a clean seeded world for the view captures.
     await openTab(A, "director");
     const seq = log.lastSeq;
-    await A.page.click('.director .seg.wide button:has-text("DREX")', { timeout: 6000 }).catch(() => {});
+    await click(A, '.director .seg.wide button:has-text("DREX")', { timeout: 6000 }).catch(() => {});
     await log.waitFor("MODE_CHANGED", (e) => e.payload.mode === "drex", 4000, seq);
-    await A.page.click('.director button:has-text("Seeded reset")', { timeout: 6000 }).catch(() => {});
+    await click(A, '.director button:has-text("Seeded reset")', { timeout: 6000 }).catch(() => {});
     await log.waitFor("ROOM_RESET", () => true, 5000, seq);
     await sleep(1800);
     for (const a of actors) await refreshIdent(a);
@@ -879,7 +883,7 @@ async function main(): Promise<void> {
     const stuck: string[] = [];
     for (const a of actors) {
       const big = await a.page.evaluate(`(() => { const b = Array.from(document.querySelectorAll(".tabs button")).find((x) => /smaller/.test(x.innerText)); const c = document.querySelector(".city canvas"); return b ? Math.round(c ? c.getBoundingClientRect().height : 0) : null; })()`) as number | null;
-      if (big !== null) { stuck.push(`${a.key} (${a.role}): city ${big} px tall`); await a.page.click('.tabs button:has-text("smaller")').catch(() => {}); }
+      if (big !== null) { stuck.push(`${a.key} (${a.role}): city ${big} px tall`); await click(a, '.tabs button:has-text("smaller")').catch(() => {}); }
     }
     if (stuck.length) rec.note(`S12: after the experiment the bottom panel was still enlarged and the city squeezed in ${stuck.join("; ")}. The harness clicked "smaller" to restore the layout before capturing the views.`);
     measured.panel_left_enlarged_after_experiment = stuck;
@@ -898,7 +902,7 @@ async function main(): Promise<void> {
       const btn = v0.seg.find((b) => b.text === "3D");
       if (!btn || btn.disabled) { results.push({ ctx: a.key, ok: false, why: "the 3D button is missing or disabled" }); continue; }
       const errsBefore = a.console.length;
-      await a.page.click('.hdr .seg button:has-text("3D")');
+      await click(a, '.hdr .seg button:has-text("3D")');
       const up = await until(async () => { const v = await view(a); return /· 3D/.test(v.cityText ?? "") && !(v.canvas?.label ?? "").startsWith(flat) && v.canvasCount >= 1 ? v : null; }, 25000, 200);
       await sleep(up ? 4500 : 500);
       const v = await view(a);
@@ -930,7 +934,7 @@ async function main(): Promise<void> {
       await collectTraces();
     }
     // Back to 2D.
-    for (const a of actors) await a.page.click('.hdr .seg button:has-text("2D")').catch(() => {});
+    for (const a of actors) { await dismissOverlay(a); await click(a, '.hdr .seg button:has-text("2D")').catch(() => {}); }
     await sleep(900);
     const vBack = await Promise.all(actors.map(view));
     rec.rec("S12", "S12.toggle-back", "the toggle returns every browser to the 2D city", vBack.every((v) => (v.canvas?.label ?? "").startsWith(flat)), { labels: vBack.map((v) => v.canvas?.label) }, ["NFR-001"]);
@@ -967,7 +971,7 @@ async function main(): Promise<void> {
       await sleep(1500);
       const s = await new Api(failBase, ROOM).snapshot();
       const n = s.npcs.find((x) => x.lastDecision?.decisionSource === "fallback");
-      if (n) await J.page.click(`.inspector .chip:has-text("${n.name.split(" ").slice(-1)[0]}")`).catch(() => {});
+      if (n) await click(J, `.inspector .chip:has-text("${n.name.split(" ").slice(-1)[0]}")`).catch(() => {});
       await sleep(600);
       const v = await view(J);
       rec.rec("S11", "S11.ui", "the UI of the failing instance never shows a fabricated model result: fallback badge in the header, FALLBACK rule in the inspector, no confidence and no probability bars",

@@ -26,6 +26,8 @@ export interface Traffic {
   readonly linkCount: number;
   /** Per directed lane: end point (the stop line), travel direction 0..3, the node it arrives at, signal lamp spot. */
   readonly linkX1: Float32Array; readonly linkZ1: Float32Array; readonly linkDir: Uint8Array; readonly linkNode: Int16Array;
+  /** 0 for a lane closed to traffic (it gets no stop line and no lamp). */
+  readonly linkAlive: Uint8Array;
   readonly lampX: Float32Array; readonly lampZ: Float32Array;
   /** Static road paint, 4 numbers each (x0, z0, x1, z1). */
   readonly stopLines: Float32Array; readonly crosswalks: Float32Array;
@@ -277,7 +279,6 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     const kk = L * 3 + nextK[a]!, M = succ[kk]!;
     const u = Math.min(1, (sa - len) / Math.max(0.01, clen[kk]!)), w = 1 - u;
     const ax = linkX1[L]!, az = linkZ1[L]!, bx = lx0[M]!, bz = lz0[M]!;
-    if (ckind[kk] === 0) { cx[a] = ax + (bx - ax) * u; cz[a] = az + (bz - az) * u; cang[a] = d * (Math.PI / 2); return; }
     const qx = ccx[kk]!, qz = ccz[kk]!;
     cx[a] = w * w * ax + 2 * w * u * qx + u * u * bx;
     cz[a] = w * w * az + 2 * w * u * qz + u * u * bz;
@@ -373,7 +374,7 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
     rngState[a] = (Math.floor(rand() * 4294967295) | 1) >>> 0;
     let L = 0, at = 0;
     for (let tries = 0; tries < 40; tries++) {
-      L = Math.floor(rand() * linkCount); at = 2.4 + rand() * Math.max(0.1, llen[L]! - 4.8);
+      L = open[Math.floor(rand() * open.length)]!; at = 2.4 + rand() * Math.max(0.1, llen[L]! - 4.8);
       let clear = true;
       for (let b = 0; b < a; b++) if (link[b] === L && Math.abs(s[b]! - at) < 7.5) clear = false;
       if (clear) break;
@@ -387,7 +388,7 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number, ke
 
   return {
     xs, zs, xNeg, xPos, zNeg, zPos, land, nodeCount, nodeX, nodeZ, nodeSignal,
-    linkCount, linkX1, linkZ1, linkDir, linkNode, lampX, lampZ,
+    linkCount, linkX1, linkZ1, linkDir, linkNode, linkAlive, lampX, lampZ,
     stopLines: new Float32Array(stop), crosswalks: new Float32Array(walks),
     carCount, x, z, ang, speed: v, brake, blink, kind, style, halfLen, halfWid,
     time: () => time, step, sample, signal,

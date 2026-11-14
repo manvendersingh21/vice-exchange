@@ -206,16 +206,53 @@ function gallery3(): void {
   ]);
 }
 
+// ---- ?scene=live: no mocks at all. Joins a real server through the Vite proxy as an outlaw, walks to the first
+// job, completes it and lets the real NPC pipeline (real provider calls or real fallbacks) drive the cards. ----
+async function liveStory(): Promise<void> {
+  const net = await import("../../net/socketClient");
+  const store = await import("../../state/gameStore");
+  const ack = await net.joinRoom({ create: true, roomCode: "", nickname: "Ace", role: "OUTLAW" });
+  if (!ack.ok) { console.error("live join failed", ack.error); return; }
+  const sleep = (ms: number) => new Promise<void>((r) => { later(ms, r); });
+  const me = () => store.selectMyCharacter(useGame.getState());
+  const walkTo = async (tx: number, tz: number) => {
+    for (let i = 0; i < 120; i++) {
+      const c = me(); if (!c) return;
+      const p = store.getPose(c.id) ?? c;
+      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+      if (d < 1.4) break;
+      net.sendNoAck({ type: "player.move", dirX: dx / d, dirZ: dz / d });
+      await sleep(90);
+    }
+    net.sendNoAck({ type: "player.move", dirX: 0, dirZ: 0 });
+  };
+  await sleep(1200);
+  const m = Object.values(useGame.getState().missions).find((x) => x.status === "AVAILABLE");
+  if (m) {
+    await walkTo(m.x, m.z);
+    await sleep(200);
+    const r = await net.send({ type: "mission.interact", missionId: m.id, commandId: net.newId() });
+    console.warn("live mission", JSON.stringify(r.ok ? { ok: true } : r.error));
+  }
+  for (let i = 0; i < 3; i++) {
+    await sleep(7000);
+    const r = await net.send({ type: "demo.incident", incidentType: "SIGHTING", commandId: net.newId() });
+    console.warn("live incident", JSON.stringify(r.ok ? r.result : r.error));
+  }
+}
+
 // ---- store bootstrap: history that must NEVER be replayed is already in the log before the component mounts ----
 const history: GameEvent[] = [
   ev("ROOM_CREATED", "server", { roomCode: "VICE-42", seed: 42, ruleVersion: "h0.2", mode: "drex", npcCount: 8 }),
   ev("DECISION_REQUESTED", "npc_w1", { decisionId: "dec_old", agentId: "npc_w1", role: "WITNESS", mode: "drex", offeredActions: ["report", "ignore", "gossip"], triggerEventId: "ev_0", stateHash: "x" }),
   ev("DECISION_RESOLVED", "npc_w1", { decisionId: "dec_old", agentId: "npc_w1", role: "WITNESS", status: "APPLIED", decisionSource: "drex", provider: "drex", model: "drex-max-v1.1", chosenAction: "ignore", providerChoice: "ignore", offeredActions: ["report", "ignore", "gossip"], confidence: 0.9, probabilities: { report: 0.03, ignore: 0.95, gossip: 0.02 }, providerRequestId: "req_old", latencyMs: 300, providerEvalMs: 120, errorType: null, rejectReason: null }),
 ] as unknown as GameEvent[];
-useGame.setState({
-  conn: "connected", runId: RUN, roomCode: "VICE-42", mode: "drex", events: history,
-  npcs: Object.fromEntries(NPCS.map((n) => [n.id, n])), characters: Object.fromEntries(CHARS.map((c) => [c.id, c])),
-});
+if (SCENE !== "live") {
+  useGame.setState({
+    conn: "connected", runId: RUN, roomCode: "VICE-42", mode: "drex", events: history,
+    npcs: Object.fromEntries(NPCS.map((n) => [n.id, n])), characters: Object.fromEntries(CHARS.map((c) => [c.id, c])),
+  });
+}
 
 function Backdrop() {
   const [City, setCity] = useState<ComponentType<Record<string, unknown>> | null>(null);
@@ -233,7 +270,7 @@ function Backdrop() {
 function Preview() {
   const selected = useGame((s) => s.selectedAgentId);
   useEffect(() => {
-    const scenes: Record<string, () => void> = { busy: busyStory, think, gallery1, gallery2, gallery3, idle: () => undefined };
+    const scenes: Record<string, () => void> = { busy: busyStory, think, gallery1, gallery2, gallery3, idle: () => undefined, live: () => { void liveStory(); } };
     (scenes[SCENE] ?? busyStory)();
     return () => { for (const t of timers) window.clearTimeout(t); timers.length = 0; };
   }, []);

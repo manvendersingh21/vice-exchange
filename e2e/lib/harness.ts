@@ -93,7 +93,10 @@ export const VIEW_JS = `(() => {
     timeline: all(".tl-list .ev").map((e) => ({ text: txt(e), cls: e.className })),
     chainButton: chainBtn ? txt(chainBtn) : null,
     notice: txt(document.querySelector(".notice")),
-    crash: txt(document.querySelector(".crash")),
+    crash: txt(document.querySelector(".cc-root") || document.querySelector(".crash")),
+    overlay: !!document.querySelector(".cc-root, .crash"),
+    tape: txt(document.querySelector(".vxt")),
+    tabs: all(".tabs button[role=tab]").map(txt),
     toasts: all(".toasts .toast").map(txt),
     canvas: rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height, label: canvas.getAttribute("aria-label") } : null,
     canvasCount: document.querySelectorAll(".city canvas").length,
@@ -115,7 +118,7 @@ export interface View {
   chips: Array<{ text: string | null; title: string | null; on: boolean }>;
   agent: string | null; agentName: string | null; decSrc: string | null; decChoice: string | null; decMeta: string | null; decOpts: Array<string | null>; decBars: number;
   mems: Array<string | null>; timeline: Array<{ text: string | null; cls: string }>; chainButton: string | null;
-  notice: string | null; crash: string | null; toasts: Array<string | null>;
+  notice: string | null; crash: string | null; overlay: boolean; tape: string | null; tabs: Array<string | null>; toasts: Array<string | null>;
   canvas: { x: number; y: number; w: number; h: number; label: string | null } | null; canvasCount: number; cityText: string | null;
   tab: string | null; director: string | null; seg: Array<{ text: string | null; on: boolean; disabled: boolean }>;
 }
@@ -150,6 +153,26 @@ export async function pageSend(a: Actor, cmd: Record<string, unknown>): Promise<
   try {
     return await a.page.evaluate(`(async () => { const m = await import("/src/net/socketClient.ts"); return await m.send(${JSON.stringify(cmd)}); })()`) as never;
   } catch (e) { return { ok: false, error: { code: "HARNESS", message: `page socket unavailable: ${(e as Error).message.slice(0, 200)}` } }; }
+}
+
+/** The capture cinematic covers the whole page for a few seconds and swallows clicks. Dismiss it the way a user would (Escape). */
+export async function dismissOverlay(a: Actor): Promise<boolean> {
+  const has = (): Promise<boolean> => a.page.evaluate(`!!document.querySelector(".cc-root, .crash")`).catch(() => false) as Promise<boolean>;
+  if (!(await has())) return false;
+  for (let i = 0; i < 4 && (await has()); i++) {
+    await a.page.keyboard.press("Escape").catch(() => {});
+    await sleep(350);
+    if (await has()) await a.page.evaluate(`(() => { const e = document.querySelector(".cc-root, .crash"); if (e) e.click(); })()`).catch(() => {});
+    await sleep(350);
+  }
+  const end = Date.now() + 7000;
+  while (Date.now() < end && (await has())) await sleep(150);
+  return true;
+}
+/** Click that first gets any full-page overlay out of the way. */
+export async function click(a: Actor, selector: string, o: { timeout?: number } = {}): Promise<void> {
+  await dismissOverlay(a);
+  await a.page.click(selector, { timeout: o.timeout ?? 6000 });
 }
 
 export async function until<T>(fn: () => Promise<T | null | undefined | false> | T | null | undefined | false, timeoutMs: number, everyMs = 100): Promise<T | null> {

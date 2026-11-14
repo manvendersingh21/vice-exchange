@@ -34,6 +34,12 @@ export interface AmbientOptions {
   pedestrians?: number;
   /** "low" drops the haze and searchlights and halves the water sparkle. */
   quality?: "high" | "low";
+  /**
+   * Optional fixed spots the traffic must never drive over (for example where a stall or a standing figure is).
+   * Lanes and junction movements within 1.9 m of a spot are closed when the layer is created; it is plain
+   * geometry, read once, and the layer still never looks at live state.
+   */
+  keepClear?: ReadonlyArray<{ x: number; z: number }>;
 }
 export interface Ambient {
   /** Advance the scenery. Call once per frame with the frame time in milliseconds. */
@@ -92,7 +98,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
   const rand = mulberry32(seed * 7919 + 17);
   const high = options.quality !== "low";
   let reduced = options.reducedMotion ?? (typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-  const traffic = createTraffic(map, seed, options.cars ?? 26);
+  const traffic = createTraffic(map, seed, options.cars ?? 26, options.keepClear ?? []);
   const land = traffic.land;
   const W = map.width, H = map.height;
   let t = 0;                       // scenery clock in seconds
@@ -209,7 +215,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
 
   // ---------------------------------------------------------------- kerbside parked cars on the dead-end stubs by the water
   const parkTmp: number[] = [];
-  const keepClear: Array<{ x: number; z: number }> = [...MISSION_SPOTS, ...SPAWN_POINTS.OUTLAW, ...SPAWN_POINTS.HUNTER];
+  const keepClear: Array<{ x: number; z: number }> = [...MISSION_SPOTS, ...SPAWN_POINTS.OUTLAW, ...SPAWN_POINTS.HUNTER, ...(options.keepClear ?? [])];
   if (traffic.zs.length) {
     const j = traffic.zs.length - 1, zTop = traffic.zs[j]! + traffic.zPos[j]! + 3.6;
     for (let i = 0; i < traffic.xs.length; i++) for (let side = -1; side <= 1; side += 2) {
@@ -461,7 +467,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
     ctx.beginPath();
     for (let i = 0; i < sl.length; i += 4) {
       const L = i >> 2;
-      if (!traffic.nodeSignal[traffic.linkNode[L]!]) continue;
+      if (!traffic.linkAlive[L] || !traffic.nodeSignal[traffic.linkNode[L]!]) continue;
       if (Math.max(sl[i]!, sl[i + 2]!) < vx0 || Math.min(sl[i]!, sl[i + 2]!) > vx1 || Math.max(sl[i + 1]!, sl[i + 3]!) < vz0 || Math.min(sl[i + 1]!, sl[i + 3]!) > vz1) continue;
       ctx.moveTo(sl[i]!, sl[i + 1]!); ctx.lineTo(sl[i + 2]!, sl[i + 3]!);
     }
@@ -473,7 +479,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
     const n = traffic.linkCount, lx = traffic.lampX, lz = traffic.lampZ;
     ctx.fillStyle = "#0a0a1c";
     for (let L = 0; L < n; L++) {
-      if (!traffic.nodeSignal[traffic.linkNode[L]!]) continue;
+      if (!traffic.linkAlive[L] || !traffic.nodeSignal[traffic.linkNode[L]!]) continue;
       const x = lx[L]!, z = lz[L]!;
       if (x < vx0 - 2 || x > vx1 + 2 || z < vz0 - 2 || z > vz1 + 2) continue;
       ctx.beginPath(); ctx.roundRect(x - 0.34, z - 0.34, 0.68, 0.68, 0.16); ctx.fill();
@@ -481,7 +487,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
     ctx.globalCompositeOperation = "lighter";
     for (let L = 0; L < n; L++) {
       const node = traffic.linkNode[L]!;
-      if (!traffic.nodeSignal[node]) continue;
+      if (!traffic.linkAlive[L] || !traffic.nodeSignal[node]) continue;
       const x = lx[L]!, z = lz[L]!;
       if (x < vx0 - 2 || x > vx1 + 2 || z < vz0 - 2 || z > vz1 + 2) continue;
       const st = traffic.signal(node, traffic.linkDir[L]!);

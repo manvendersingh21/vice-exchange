@@ -50,6 +50,8 @@ round trip per provider call as recorded on each decision trace; time to capture
   3. otherwise a fresh player; a nickname already in the room is suffixed (Ace -> Ace2). ROOM_FULL at 8 connected humans.
 - Director: creator of a `room.create` room; the first browser ON THE SERVER'S OWN MACHINE to join the boot-time room VICE-42 (loopback
   peer and a localhost page origin; never a LAN visitor, never a `bridge:` client); anyone presenting the director secret.
+- `demo.runExperiment` additionally needs a director who joined from the server's own machine or with the director secret
+  (creating a room is not enough); others get FORBIDDEN.
 - Rooms: at most 8 live rooms including VICE-42 (`room.create` then answers ROOM_FULL "Too many rooms"); a created room with no connected
   human for 3 minutes is closed (timer stopped, decisions cancelled); its history stays in the store. VICE-42 is never closed.
 - Server -> client: `room.snapshot` (join, reset, respawn, player join/leave, policy loaded), `world.tick` 10 Hz, `event` (one GameEvent per emit,

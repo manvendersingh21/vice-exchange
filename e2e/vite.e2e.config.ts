@@ -8,7 +8,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig } from "vite";
-import base from "../apps/web/vite.config";
+import base from "../apps/web/vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.E2E_WEB_PORT ?? 5231);

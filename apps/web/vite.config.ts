@@ -12,8 +12,8 @@ export default defineConfig({
     strictPort: true,
     host: true,
     proxy: {
-      "/socket.io": { target: SERVER, ws: true, changeOrigin: true },
-      "/api": { target: SERVER, changeOrigin: true },
+      "/socket.io": { target: SERVER, ws: true, changeOrigin: true, xfwd: true },
+      "/api": { target: SERVER, changeOrigin: true, xfwd: true },
       "/health": { target: SERVER, changeOrigin: true },
     },
   },

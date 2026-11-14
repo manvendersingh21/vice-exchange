@@ -72,8 +72,8 @@
 .cc-readout-fx {
   --cc-c: 0;
   position: relative; display: block; white-space: nowrap; text-align: center; line-height: 1; will-change: transform, opacity;
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-weight: 800; font-variant-numeric: tabular-nums;
-  font-size: min(10.5vw, 16vh); padding: .22em .26em .1em; min-width: calc(var(--cc-chars) * .62em + .7em);
+  font-weight: 900; font-variant-numeric: tabular-nums lining-nums;
+  font-size: min(10.5vw, 16vh); padding: .25em .3em .08em; min-width: calc(var(--cc-chars) * .66em + .8em);
   background: linear-gradient(180deg, rgba(9, 2, 8, .76), rgba(26, 3, 13, .68));
   -webkit-backdrop-filter: blur(.045em) saturate(1.25); backdrop-filter: blur(.045em) saturate(1.25);
   border: max(2px, .02em) solid rgba(255, 84, 104, .6); border-radius: .07em;
@@ -88,8 +88,10 @@
   position: absolute; right: .55em; top: .34em; font-size: .14em; font-weight: 800; letter-spacing: .04em; color: #ff5468;
   text-shadow: 0 0 .7em rgba(255, 84, 104, .85);
 }
-.cc-cell { display: inline-block; width: .62em; text-align: center; will-change: transform; }
-.cc-cell.pre { color: #ff9db0; }
+/* Fixed-width digit cells: the number never reflows while it falls. "V$" and separators keep their own width. */
+.cc-cell { display: inline-block; width: .66em; text-align: center; will-change: transform; }
+.cc-cell.pre { width: auto; color: #ff9db0; }
+.cc-cell.sep { width: .3em; }
 .cc-readout-fx.is-zero { color: #ff5468; border-color: #ff5468; box-shadow: 0 0 0 max(1px, .01em) rgba(0, 0, 0, .7), 0 0 1.6em rgba(255, 84, 104, .8), inset 0 0 1em rgba(255, 84, 104, .4); }
 .cc-readout-fx.is-zero .cc-cell { color: #ff5468; text-shadow: 0 0 .12em #fff, 0 0 .5em rgba(255, 84, 104, .95); }
 
