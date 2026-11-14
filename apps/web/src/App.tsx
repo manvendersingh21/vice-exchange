@@ -1,3 +1,4 @@
+import { WorldFrame } from "./components/WorldFrame";
 import { useEffect, useMemo, useState } from "react";
 import { CREDITS_NOTICE, RULES, dist } from "@vice/contracts";
 import type { CharacterView, MissionView } from "@vice/contracts";
@@ -15,6 +16,7 @@ import SwarmGraph from "./components/wow/SwarmGraph";
 import { getPose, isLive, selectMyCharacter, useGame, useMyCharacter } from "./state/gameStore";
 import { leaveRoom, newId, send, sendNoAck } from "./net/socketClient";
 import { vd } from "./lib/format";
+import { cameraRelative, cameraYaw } from "./scene/three/cameraYaw";
 
 function nearestMission(me: CharacterView, missions: MissionView[]): MissionView | null {
   const p = getPose(me.id) ?? me;
@@ -49,9 +51,11 @@ function useControls(): void {
       if (!me || !isLive(me)) return;
       const x = (down.has("d") || down.has("arrowright") ? 1 : 0) - (down.has("a") || down.has("arrowleft") ? 1 : 0);
       const z = (down.has("s") || down.has("arrowdown") ? 1 : 0) - (down.has("w") || down.has("arrowup") ? 1 : 0);
-      if (x === lastX && z === lastZ) return;
-      lastX = x; lastZ = z;
-      sendNoAck({ type: "player.move", dirX: x, dirZ: z, lastSeenTick: st.tick });
+      // 3D view: keys are camera-relative (W = away from the camera), so rotate by the camera's yaw. 2D stays north-up.
+      const rel = st.viewMode === "3d" && cameraYaw.active && (x !== 0 || z !== 0) ? cameraRelative(x, z, cameraYaw.value) : { x, z };
+      if (Math.abs(rel.x - lastX) < 0.02 && Math.abs(rel.z - lastZ) < 0.02) return;
+      lastX = rel.x; lastZ = rel.z;
+      sendNoAck({ type: "player.move", dirX: rel.x, dirZ: rel.z, lastSeenTick: st.tick });
     };
     const act = async () => {
       const st = useGame.getState();
@@ -83,6 +87,8 @@ function useControls(): void {
       if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) {
+        // In the WORLD view the embedded 3D client moves the character (it reports its own pose); the page must not.
+        if (useGame.getState().viewMode === "world") return;
         e.preventDefault(); down.add(k); pushMove();
       } else if (k === "e" && !e.repeat) { void act(); }
       else if (k === "r" && !e.repeat) { void respawn(); }
@@ -91,8 +97,10 @@ function useControls(): void {
     const onBlur = () => { down.clear(); pushMove(); };
     // Re-assert the current intent periodically so a dropped packet cannot leave the avatar stuck.
     const keepAlive = setInterval(() => { if (down.size) { lastX = NaN; pushMove(); } }, 1000);
+    // While keys are held in the 3D view, follow the camera as it turns (pushMove only sends when the vector really changed).
+    const followCam = setInterval(() => { if (down.size && useGame.getState().viewMode === "3d") pushMove(); }, 100);
     window.addEventListener("keydown", onDown); window.addEventListener("keyup", onUp); window.addEventListener("blur", onBlur);
-    return () => { clearInterval(keepAlive); window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); window.removeEventListener("blur", onBlur); };
+    return () => { clearInterval(keepAlive); clearInterval(followCam); window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); window.removeEventListener("blur", onBlur); };
   }, []);
 }
 
@@ -123,6 +131,7 @@ function Header() {
       <div className="seg" role="group" aria-label="City renderer">
         <button className={viewMode === "2d" ? "on" : ""} onClick={() => useGame.setState({ viewMode: "2d" })}>2D</button>
         <button className={viewMode === "3d" ? "on" : ""} disabled={!has3D} title={has3D ? "3D city" : "3D view is not available in this build"} onClick={() => useGame.setState({ viewMode: "3d" })}>3D</button>
+        <button className={viewMode === "world" ? "on" : ""} title="The Open Theft Auto 3D world, playing as you" onClick={() => useGame.setState({ viewMode: "world" })}>WORLD</button>
       </div>
       <div className="hdr-item">{session?.nickname} · <b>{session?.role}</b>{session?.isDirector ? " · DIRECTOR" : ""}</div>
       <button className="ghost" onClick={leaveRoom}>Leave</button>
@@ -145,6 +154,7 @@ function CityHost() {
   const npcList = useMemo(() => Object.values(npcs), [npcs]);
   const missionList = useMemo(() => Object.values(missions), [missions]);
   const listingList = useMemo(() => Object.values(listings), [listings]);
+  if (viewMode === "world") return <WorldFrame />;
   return (
     <CityView renderer={viewMode} map={map} characters={chars} npcs={npcList} missions={missionList} listings={listingList}
       tick={tick} events={events} youCharacterId={me?.id ?? null} selectedId={selectedId}

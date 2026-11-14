@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObjec
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { cameraYaw } from "./cameraYaw";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
@@ -84,14 +85,75 @@ function Pipeline({ high, phase, onRun, onReady, onSlow }: { high: boolean; phas
   return null;
 }
 
-const SHOTS: Array<[number, number]> = [[8.5, 16], [12.5, 14], [18, 11.5], [26, 8]];
+const DEG = Math.PI / 180;
+/** Camera presets: yaw 0 = lens south of the player looking north (so WASD matches the 2D view), pitch above the horizon, distance in metres. */
+const CAM_PRESETS = [
+  { name: "CHASE", yaw: 0, pitch: 28 * DEG, dist: 18.1 },
+  { name: "HIGH ANGLE", yaw: 0, pitch: 55 * DEG, dist: 30 },
+  { name: "TOP-DOWN", yaw: 0, pitch: 84 * DEG, dist: 46 },
+  { name: "CINEMATIC", yaw: 62 * DEG, pitch: 9 * DEG, dist: 11 },
+] as const;
+const CAM_PITCH_MIN = 4 * DEG, CAM_PITCH_MAX = 86 * DEG, CAM_DIST_MIN = 5, CAM_DIST_MAX = 64;
+/** The player's chosen angle. Module level on purpose: it survives respawn, quality switches and 2D/3D toggles. */
+const camUser = { yaw: CAM_PRESETS[0].yaw as number, pitch: CAM_PRESETS[0].pitch as number, dist: CAM_PRESETS[0].dist as number, preset: 0, lastDragAt: 0 };
+const LIFTS = [0, 10 * DEG, 20 * DEG, 32 * DEG, 46 * DEG, 62 * DEG];
 /**
- * Cinematic third-person camera. Heading is fixed (north = away from the lens) so WASD matches the 2D view. It lifts over
- * tall buildings, and it feeds the shader keyhole that dissolves props standing between the lens and the player.
+ * Third-person camera the player controls: drag to orbit (yaw and pitch, clamped above the ground), wheel or pinch to zoom,
+ * C cycles presets, V or double-click resets behind the character. WASD is camera-relative: the client rotates the key
+ * vector by this camera's yaw before sending the move intent (the server still integrates the position).
+ * It still lifts over tall buildings and feeds the shader keyhole that dissolves props between the lens and the player.
  */
-function FollowCamera({ id, fallback, anchors, map }: { id: string; fallback: { x: number; z: number }; anchors: Anchors; map: MapView }) {
-  const { camera } = useThree();
-  const st = useRef({ focus: new THREE.Vector3(), off: new THREE.Vector2(SHOTS[0]![0], SHOTS[0]![1]), vel: new THREE.Vector2(), first: true, v: new THREE.Vector3() });
+function FollowCamera({ id, fallback, anchors, map, onPreset }: { id: string; fallback: { x: number; z: number }; anchors: Anchors; map: MapView; onPreset: (name: string) => void }) {
+  const { camera, gl } = useThree();
+  const st = useRef({ focus: new THREE.Vector3(), yaw: camUser.yaw, pitch: camUser.pitch, dist: camUser.dist, lift: 0, vel: new THREE.Vector2(), first: true, v: new THREE.Vector3() });
+  const presetCb = useRef(onPreset); presetCb.current = onPreset;
+  useEffect(() => {
+    const el = gl.domElement;
+    let down: { x: number; y: number; id: number } | null = null, dragging = false;
+    const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    const apply = (i: number) => { const p = CAM_PRESETS[i]!; camUser.preset = i; camUser.yaw = p.yaw; camUser.pitch = p.pitch; camUser.dist = p.dist; presetCb.current(p.name); };
+    const onDown = (e: PointerEvent) => { if (e.button !== 0 && e.button !== 2) return; down = { x: e.clientX, y: e.clientY, id: e.pointerId }; dragging = false; };
+    const onMove = (e: PointerEvent) => {
+      if (!down || e.pointerId !== down.id) return;
+      const dx = e.clientX - down.x, dy = e.clientY - down.y;
+      if (!dragging) { if (Math.hypot(dx, dy) < 5) return; dragging = true; try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ } el.style.cursor = "grabbing"; }
+      down.x = e.clientX; down.y = e.clientY;
+      camUser.yaw -= dx * 0.0058;
+      camUser.pitch = Math.min(CAM_PITCH_MAX, Math.max(CAM_PITCH_MIN, camUser.pitch + dy * 0.0046));
+      camUser.preset = -1; presetCb.current("FREE");
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!down || e.pointerId !== down.id) return;
+      if (dragging) { camUser.lastDragAt = performance.now(); try { el.releasePointerCapture(e.pointerId); } catch { /* already released */ } el.style.cursor = ""; }
+      down = null; dragging = false;
+    };
+    // A drag must never count as a click (no NPC selection, no deselect): swallow the click that ends it.
+    const onClickCapture = (e: MouseEvent) => { if (performance.now() - camUser.lastDragAt < 250 && (e.target === el || el.parentElement?.contains(e.target as Node))) { e.stopPropagation(); e.preventDefault(); } };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const k = Math.exp((e.ctrlKey ? e.deltaY * 0.012 : e.deltaY * 0.0016));
+      camUser.dist = Math.min(CAM_DIST_MAX, Math.max(CAM_DIST_MIN, camUser.dist * k));
+      if (camUser.preset !== -1) { camUser.preset = -1; presetCb.current("FREE"); }
+    };
+    const onDbl = () => apply(0);
+    const onCtx = (e: MouseEvent) => e.preventDefault();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+      const k = e.key.toLowerCase();
+      if (k === "c") apply((camUser.preset + 1 + CAM_PRESETS.length) % CAM_PRESETS.length);
+      else if (k === "v") apply(0);
+    };
+    el.addEventListener("pointerdown", onDown); window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp); window.addEventListener("pointercancel", onUp);
+    window.addEventListener("click", onClickCapture, true); el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("dblclick", onDbl); el.addEventListener("contextmenu", onCtx); window.addEventListener("keydown", onKey);
+    presetCb.current(camUser.preset >= 0 ? CAM_PRESETS[camUser.preset]!.name : "FREE");
+    return () => {
+      cameraYaw.active = false;
+      el.removeEventListener("pointerdown", onDown); window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("click", onClickCapture, true); el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("dblclick", onDbl); el.removeEventListener("contextmenu", onCtx); window.removeEventListener("keydown", onKey); el.style.cursor = "";
+    };
+  }, [gl]);
   useFrame(({ clock }, dtRaw) => {
     const s = st.current, dt = Math.min(dtRaw, 0.1);
     const body = anchors.get(id)?.obj.position;
@@ -99,17 +161,27 @@ function FollowCamera({ id, fallback, anchors, map }: { id: string; fallback: { 
     const k = s.first ? 1 : 1 - Math.exp(-dt * 5), px = s.focus.x, pz = s.focus.z;
     s.focus.x += (tx - px) * k; s.focus.z += (tz - pz) * k;
     if (!s.first && dt > 0) { s.vel.x += ((s.focus.x - px) / dt - s.vel.x) * 0.06; s.vel.y += ((s.focus.z - pz) / dt - s.vel.y) * 0.06; }
-    let pick = SHOTS[SHOTS.length - 1]!;
-    for (const shot of SHOTS) {
-      const lens = { x: s.focus.x, z: s.focus.z + shot[1] };
-      if (!map.buildings.some((b) => b.height > shot[0] * 0.5 && segmentHitsRect({ x: s.focus.x, z: s.focus.z }, lens, { x0: b.x0 - 1.2, z0: b.z0 - 1.2, x1: b.x1 + 1.2, z1: b.z1 + 1.2 }))) { pick = shot; break; }
+    // damped approach to the player's chosen angle (yaw unwrapped so it takes the short way round)
+    const kc = s.first ? 1 : 1 - Math.exp(-dt * 7);
+    let dy = camUser.yaw - s.yaw; dy -= Math.round(dy / (Math.PI * 2)) * Math.PI * 2;
+    if (Math.abs(camUser.yaw - s.yaw - dy) > 1e-6) camUser.yaw = s.yaw + dy;
+    s.yaw += dy * kc; s.pitch += (camUser.pitch - s.pitch) * kc; s.dist += (camUser.dist - s.dist) * kc;
+    cameraYaw.value = s.yaw; cameraYaw.active = true; // WASD is camera-relative: the keyboard handler rotates by this
+    // lift over tall buildings between the lens and the player: raise the pitch until the sight line is clear
+    let lift = LIFTS[LIFTS.length - 1]!;
+    for (const add of LIFTS) {
+      const p = Math.min(CAM_PITCH_MAX, s.pitch + add), h = Math.sin(p) * s.dist, r = Math.cos(p) * s.dist;
+      const lens = { x: s.focus.x + Math.sin(s.yaw) * r, z: s.focus.z + Math.cos(s.yaw) * r };
+      if (!map.buildings.some((b) => b.height > h * 0.5 && segmentHitsRect({ x: s.focus.x, z: s.focus.z }, lens, { x0: b.x0 - 1.2, z0: b.z0 - 1.2, x1: b.x1 + 1.2, z1: b.z1 + 1.2 }))) { lift = add; break; }
     }
-    const ko = s.first ? 1 : 1 - Math.exp(-dt * 2.4);
-    s.off.x += (pick[0] - s.off.x) * ko; s.off.y += (pick[1] - s.off.y) * ko;
+    s.lift += (lift - s.lift) * (s.first ? 1 : 1 - Math.exp(-dt * 2.4));
     s.first = false;
+    const pitch = Math.min(CAM_PITCH_MAX, s.pitch + s.lift), h = Math.max(1.2, Math.sin(pitch) * s.dist), r = Math.cos(pitch) * s.dist;
+    const sx = Math.sin(s.yaw), cz = Math.cos(s.yaw);
     const lead = Math.min(1, s.vel.length() / 9), sway = Math.sin(clock.elapsedTime * 0.45) * 0.1;
-    camera.position.set(s.focus.x + s.vel.x * 0.18 + sway, s.off.x, s.focus.z + s.off.y);
-    camera.lookAt(s.focus.x + s.vel.x * 0.3, 2.1, s.focus.z - 10 + s.vel.y * 0.25);
+    camera.position.set(s.focus.x + sx * r + s.vel.x * 0.18 + sway, h, s.focus.z + cz * r);
+    const ahead = 10 * Math.cos(pitch) * Math.cos(pitch); // look past the player at street level, straight down from above
+    camera.lookAt(s.focus.x - sx * ahead + s.vel.x * 0.3, 2.1, s.focus.z - cz * ahead + s.vel.y * 0.25);
     const pc = camera as THREE.PerspectiveCamera, fov = 56 + lead * 5;
     if (Math.abs(pc.fov - fov) > 0.05) { pc.fov += (fov - pc.fov) * 0.08; pc.updateProjectionMatrix(); }
     camera.updateMatrixWorld();
@@ -183,6 +255,7 @@ export default function ThreeCity(props: CityViewProps) {
   const [quality, setQualityState] = useState<Quality>(loadQuality);
   const [phase, setPhase] = useState<Phase>("boot");
   const [veilGone, setVeilGone] = useState(false);
+  const [camName, setCamName] = useState("CHASE");
   const mounted = useRef(false);
   if (!mounted.current) { mounted.current = true; marks.mountMs = Math.round(performance.now()); marks.firstFrameMs = 0; }
   const setQuality = (q: Quality) => {
@@ -284,7 +357,7 @@ export default function ThreeCity(props: CityViewProps) {
         ))}
         {arcs.map((a) => <MessageArc key={a.id} from={a.from} to={a.to} kind={a.kind} startedAtMs={a.startedAtMs} durationMs={a.durationMs} />)}
         {bursts.map((b) => <CaptureBurst key={b.id} id={b.id} x={b.x} z={b.z} startedAtMs={b.startedAtMs} anchors={anchors} />)}
-        {you ? <FollowCamera id={you.id} fallback={you} anchors={anchors} map={map} /> : <Orbit map={map} />}
+        {you ? <FollowCamera id={you.id} fallback={you} anchors={anchors} map={map} onPreset={setCamName} /> : <Orbit map={map} />}
         <LabelProjector anchors={anchors} els={labelEls} />
         <Pipeline high={high} phase={phase} onRun={() => setPhase((p) => (p === "boot" ? "run" : p))} onReady={() => setPhase("ready")} onSlow={() => setQuality("low")} />
       </Canvas>
@@ -326,8 +399,8 @@ export default function ThreeCity(props: CityViewProps) {
         </div>
       )}
 
-      <div style={{ position: "absolute", left: 10, bottom: 8, font: `600 10px ${FONT}`, color: "rgba(255,255,255,0.7)", pointerEvents: "none", letterSpacing: 1 }}>
-        {map.name.toUpperCase()} · 3D{you ? "" : " · DRAG TO ORBIT"}
+      <div style={{ position: "absolute", left: 10, top: 8, font: `600 11px ${FONT}`, color: "rgba(255,255,255,0.86)", pointerEvents: "none", letterSpacing: 1, textShadow: "0 1px 3px #000", background: "rgba(14,8,28,0.5)", borderRadius: 6, padding: "3px 8px" }}>
+        {map.name.toUpperCase()} · 3D{you ? ` · CAM ${camName} · drag to look · scroll to zoom · C camera · V reset · WASD follows the camera` : " · DRAG TO ORBIT"}
       </div>
       <button
         type="button" onClick={() => setQuality(high ? "low" : "high")} title="Toggle shadows, bloom and high-resolution rendering"
