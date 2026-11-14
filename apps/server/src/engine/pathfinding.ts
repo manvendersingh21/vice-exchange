@@ -1,5 +1,5 @@
 // Grid A* over the static city map, so officers walk around buildings instead of into them.
-import { CITY_MAP, segmentHitsRect } from "@vice/contracts";
+import { CITY_MAP, carRects, segmentHitsRect } from "@vice/contracts";
 import type { Rect, Vec2 } from "@vice/contracts";
 
 const CELL = 1; // metres per cell
@@ -11,7 +11,8 @@ const grids = new Map<number, Uint8Array>();
 const paddedCache = new Map<number, Rect[]>();
 function padded(pad: number): Rect[] {
   let r = paddedCache.get(pad);
-  if (!r) { r = CITY_MAP.buildings.map((b) => ({ x0: b.x0 - pad, z0: b.z0 - pad, x1: b.x1 + pad, z1: b.z1 + pad })); paddedCache.set(pad, r); }
+  // Buildings and solid parked cars are obstacles for walking (cars never block line of sight; that is a separate test).
+  if (!r) { r = [...CITY_MAP.buildings, ...carRects()].map((b) => ({ x0: b.x0 - pad, z0: b.z0 - pad, x1: b.x1 + pad, z1: b.z1 + pad })); paddedCache.set(pad, r); }
   return r;
 }
 /** 1 = blocked. A cell is free when its centre is inside the walkable area and outside every padded building. */

@@ -78,6 +78,56 @@ patch("scripts/autoload/save_game.gd",
       f"func save_now() -> void:\n\tif ViceBridge.active:  {MARK}\n\t\treturn\n",
       "do not save in bridge mode")
 
+
+# 6. Web export preset (the browser UI embeds this build as its WORLD view)
+presets = target / "export_presets.cfg"
+ptxt = presets.read_text()
+if 'name="Web"' not in ptxt:
+    presets.write_text(ptxt.rstrip("\n") + """
+
+[preset.2]
+
+name="Web"
+platform="Web"
+runnable=true
+advanced_options=false
+dedicated_server=false
+custom_features=""
+export_filter="all_resources"
+include_filter=""
+exclude_filter="site/*, tests/*, build/*"
+export_path="../../apps/web/public/world/index.html"
+patches=PackedStringArray()
+patch_delta_encoding=false
+patch_delta_compression_level_zstd=19
+patch_delta_min_reduction=0.1
+patch_delta_include_filters="*"
+patch_delta_exclude_filters=""
+encryption_include_filters=""
+encryption_exclude_filters=""
+seed=0
+encrypt_pck=false
+encrypt_directory=false
+script_export_mode=2
+
+[preset.2.options]
+
+custom_template/debug=""
+custom_template/release=""
+variant/extensions_support=false
+variant/thread_support=false
+vram_texture_compression/for_desktop=true
+vram_texture_compression/for_mobile=false
+html/export_icon=true
+html/custom_html_shell=""
+html/head_include=""
+html/canvas_resize_policy=2
+html/focus_canvas_on_start=true
+html/experimental_virtual_keyboard=false
+progressive_web_app/enabled=false
+""")
+    changed.append("export_presets.cfg: Web preset")
+
 print("applied:" if changed else "already applied; nothing to do")
 for c in changed:
     print("  -", c)

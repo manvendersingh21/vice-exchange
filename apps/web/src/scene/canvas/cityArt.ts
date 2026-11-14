@@ -86,6 +86,25 @@ export function drawStaticCity(ctx: CanvasRenderingContext2D, map: MapView, S: n
     }
   }
 
+  // solid parked cars (from the shared map: the server stops players and NPCs at these exact footprints)
+  for (const c of map.cars ?? []) {
+    const L = c.length * S, Wd = c.width * S;
+    ctx.save(); ctx.translate(c.x * S, c.z * S); if (c.heading === 90) ctx.rotate(Math.PI / 2);
+    ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(-L / 2 + 0.25 * S, -Wd / 2 + 0.25 * S, L, Wd);
+    const r = 0.45 * S;
+    ctx.beginPath();
+    ctx.moveTo(-L / 2 + r, -Wd / 2); ctx.lineTo(L / 2 - r, -Wd / 2); ctx.quadraticCurveTo(L / 2, -Wd / 2, L / 2, -Wd / 2 + r);
+    ctx.lineTo(L / 2, Wd / 2 - r); ctx.quadraticCurveTo(L / 2, Wd / 2, L / 2 - r, Wd / 2); ctx.lineTo(-L / 2 + r, Wd / 2);
+    ctx.quadraticCurveTo(-L / 2, Wd / 2, -L / 2, Wd / 2 - r); ctx.lineTo(-L / 2, -Wd / 2 + r); ctx.quadraticCurveTo(-L / 2, -Wd / 2, -L / 2 + r, -Wd / 2);
+    ctx.closePath();
+    ctx.fillStyle = c.tone; ctx.fill();
+    ctx.lineWidth = 0.1 * S; ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.stroke();
+    ctx.fillStyle = "rgba(10,14,26,0.85)"; ctx.fillRect(-L * 0.2, -Wd * 0.36, L * 0.42, Wd * 0.72);          // cabin glass
+    ctx.fillStyle = "#fff2cf"; ctx.fillRect(L / 2 - 0.22 * S, -Wd * 0.38, 0.16 * S, Wd * 0.2); ctx.fillRect(L / 2 - 0.22 * S, Wd * 0.18, 0.16 * S, Wd * 0.2); // headlights
+    ctx.fillStyle = "#ff2a3c"; ctx.fillRect(-L / 2 + 0.06 * S, -Wd * 0.38, 0.14 * S, Wd * 0.2); ctx.fillRect(-L / 2 + 0.06 * S, Wd * 0.18, 0.14 * S, Wd * 0.2); // tail-lights
+    ctx.restore();
+  }
+
   // buildings
   for (const b of map.buildings) {
     const t = TONE[b.tone];

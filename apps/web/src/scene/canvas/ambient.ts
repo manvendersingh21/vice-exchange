@@ -233,7 +233,8 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
         if (roll > 0.66) continue;
         let free = true;
         for (const p of keepClear) if (Math.hypot(p.x - x, p.z - z) < 3.4) free = false;
-        if (free) parkTmp.push(x, z, side < 0 ? Math.PI / 2 : -Math.PI / 2, paint, van ? KIND_VAN : KIND_SEDAN);
+        // Parked cars are solid and come from the shared map (drawn by the static city layer), so no cosmetic ones here.
+        void free; void paint; void van;
       }
     }
   }
@@ -490,7 +491,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       if (!traffic.linkAlive[L] || !traffic.nodeSignal[node]) continue;
       const x = lx[L]!, z = lz[L]!;
       if (x < vx0 - 2 || x > vx1 + 2 || z < vz0 - 2 || z > vz1 + 2) continue;
-      const st = traffic.signal(node, traffic.linkDir[L]!);
+      const st = traffic.lamp[L]!;
       const sprite = st === SIG_GREEN ? glowGreen : st === SIG_AMBER ? glowAmber : glowRed;
       ctx.globalAlpha = 0.55; ctx.drawImage(sprite, x - 1.5, z - 1.5, 3, 3);
       ctx.globalAlpha = 1; ctx.drawImage(sprite, x - 0.42, z - 0.42, 0.84, 0.84);

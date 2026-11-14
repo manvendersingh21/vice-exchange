@@ -1,5 +1,5 @@
 import {
-  CITY_MAP, MISSION_SPOTS, RULES, RULES_VERSION, SPAWN_POINTS, dist, hasLineOfSight, insideRect, wantedLevel,
+  CITY_MAP, MISSION_SPOTS, RULES, RULES_VERSION, SPAWN_POINTS, carRects, dist, hasLineOfSight, insideRect, wantedLevel,
 } from "@vice/contracts";
 import type {
   AgentView, CaptureRejectReason, CharacterView, ClientCommand, CommandAck, CommandErrorCode, DecisionMode, DecisionTrace,
@@ -31,6 +31,8 @@ const PURSUIT_LOST_MS = 5000;
 const INVESTIGATE_LINGER_MS = 4000;
 const INVESTIGATE_GIVE_UP_MS = 120000;
 const RADIUS = 0.6;
+/** Solid parked cars: players and NPCs stop at these footprints exactly as at buildings. They never block line of sight. */
+const CAR_RECTS = carRects();
 /** The full log lives in the store; memory keeps the recent tail for snapshots, replay checks and experiments. */
 const MAX_EVENTS_IN_MEMORY = 20000;
 
@@ -44,6 +46,7 @@ export class RoomEngine implements WorldPort {
   readonly dirty: Dirty = { agents: new Set(), listings: new Set(), characters: new Set(), missions: new Set(), wallets: new Set(), snapshot: false };
   private listeners: Array<(e: GameEvent) => void> = [];
   private idem = new Map<string, CommandAck>();
+  private viaExternal = false;
   private outbox: GameEvent[] = [];
   private depth = 0;
   private runNo = 0;
@@ -319,7 +322,9 @@ export class RoomEngine implements WorldPort {
   }
 
   // ---------- commands ----------
-  dispatch(playerId: string, cmd: ClientCommand): CommandAck {
+  /** `via.external` marks commands from an external 3D world client (the bridge), whose poses are not building-checked. */
+  dispatch(playerId: string, cmd: ClientCommand, via: { external?: boolean } = {}): CommandAck {
+    this.viaExternal = !!via.external; // dispatch is synchronous, so this holds for the whole command
     const player = this.state.players[playerId];
     const id = ("commandId" in cmd ? cmd.commandId : "requestId" in cmd ? cmd.requestId : undefined) ?? "";
     if (!player) return fail(id, "NOT_JOINED", "Join a room first");
@@ -356,7 +361,7 @@ export class RoomEngine implements WorldPort {
         if (dist(c, cmd) / dt > RULES.maxPoseSpeed) return fail(id, "MOVE_REJECTED", "Too fast");
         // Browser clients share the server's map, so a reported pose may not be inside a building.
         // External 3D worlds (bridge clients) own their geometry and are only bounds- and speed-checked.
-        if (!player.socketId?.startsWith("bridge:") && this.blocked(cmd.x, cmd.z)) return fail(id, "MOVE_REJECTED", "Inside a building");
+        if (!this.viaExternal && !player.socketId?.startsWith("bridge:") && this.blocked(cmd.x, cmd.z)) return fail(id, "MOVE_REJECTED", CAR_RECTS.some((r) => insideRect(cmd, r, RADIUS)) ? "Inside a parked car" : "Inside a building");
         this.poseAt.set(c.id, now); c.x = cmd.x; c.z = cmd.z; player.moveDir = { x: 0, z: 0 };
         return ack(id);
       }
@@ -586,7 +591,7 @@ export class RoomEngine implements WorldPort {
   private blocked(x: number, z: number): boolean {
     const w = CITY_MAP.walkable;
     if (x < w.x0 || x > w.x1 || z < w.z0 || z > w.z1) return true;
-    return CITY_MAP.buildings.some((b) => insideRect({ x, z }, b, RADIUS));
+    return CITY_MAP.buildings.some((b) => insideRect({ x, z }, b, RADIUS)) || CAR_RECTS.some((r) => insideRect({ x, z }, r, RADIUS));
   }
   /** Axis-separated move with sliding. Returns true if the entity moved at all. */
   private step(e: Vec2, nx: number, nz: number): boolean {

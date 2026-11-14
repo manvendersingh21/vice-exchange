@@ -43,6 +43,7 @@ characters, maps, logos or look.
 - Heat decays 1/s after 6 s without gain while no police sees the character; dropping below 30 = ESCAPE_SUCCEEDED (+1 escape).
   Heat does not cool while any officer is INVESTIGATING or PURSUING that character (otherwise a suspect standing still out-waits the dispatch delay).
 - Police pacing: an officer acting on a second-hand report waits RULES.policeDispatchDelayMs (10 s) and searches at npcWalkSpeed x RULES.policeSearchPaceFactor (0.5); a direct sighting is never delayed. Measured live 2026-11-14: mission -> capture of a stationary outlaw 25.6 s scripted, 28.4 s Meta, 26.3 s Drex (one run each).
+- Parked cars: CITY_MAP.cars (26, from packages/contracts) are solid. Players and NPCs stop at their footprints exactly as at buildings (server-side, with sliding), A* routes around them, and they never block line of sight. Moving traffic and pedestrians in the renderers are cosmetic only. Bridge (Godot) clients are not checked against them.
 - Hunters have an avatar and wallet but no ticker. Spectators have neither.
 - Tickers are deterministic: first 3 letters of the nickname uppercased (pad with X) + "-" + 2-digit room counter, e.g. ACE-01.
 - Idempotency: every mutating command carries commandId; the engine caches the ack per (playerId, commandId) and returns it with duplicate:true.

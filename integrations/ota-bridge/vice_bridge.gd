@@ -72,6 +72,7 @@ var _cine_anchor := Vector3.ZERO
 var _cine_look := Vector3.ZERO
 var ambient := true             # --vice-no-ambient turns the extra background life off
 var fx_shots := false           # --vice-fx (with --vice-shots): photograph an incident's message arc, ring and popup
+var _last_arc: Dictionary = {}
 var _fps_t := 0.0
 var _look_done := false
 var _fx: Array = []
@@ -95,6 +96,7 @@ var ws: WebSocketPeer = null
 var ws_open := false
 var joined := false
 var session_token := ""
+var web_embed := false         # true when running as the Web export inside the browser UI
 var my_player_id := ""
 var my_character_id := ""
 var my_role := ""
@@ -153,8 +155,23 @@ var hud_banner_box: Control
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	for arg in OS.get_cmdline_user_args():
+	var args: Array[String] = []
+	for a in OS.get_cmdline_user_args(): args.append(a)
+	if OS.has_feature("web"):
+		# Embedded in the browser UI: settings come from the page URL, and the socket goes through the page's own origin.
+		args.assign(["--vice", "--vice-windowed", "--vice-no-ambient"])  # the single-threaded web build needs the frame budget
+		var q: Dictionary = {}
+		for pair in str(JavaScriptBridge.eval("window.location.search.slice(1)", true)).split("&", false):
+			var kv := pair.split("=")
+			if kv.size() == 2: q[kv[0]] = str(kv[1]).uri_decode()
+		var origin := str(JavaScriptBridge.eval("(location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host", true))
+		if not q.has("url"): args.append("--vice-url=" + origin + "/bridge")
+		for k in ["url", "name", "role", "room", "token", "time", "look"]:
+			if q.has(k) and str(q[k]) != "": args.append("--vice-%s=%s" % [k, str(q[k])])
+		web_embed = true
+	for arg: String in args:
 		if arg == "--vice": active = true
+		elif arg.begins_with("--vice-token="): session_token = arg.trim_prefix("--vice-token=")
 		elif arg == "--vice-windowed": windowed = true
 		elif arg == "--vice-check": check_mode = true; active = true
 		elif arg.begins_with("--vice-url="): url = arg.trim_prefix("--vice-url=")
@@ -175,7 +192,7 @@ func _ready() -> void:
 			record_dir = arg.trim_prefix("--vice-record="); windowed = true
 		elif arg.begins_with("--vice-wait="): wait_before = float(arg.trim_prefix("--vice-wait="))
 		elif arg.begins_with("--vice-size="):
-			var wh := arg.trim_prefix("--vice-size=").split("x")
+			var wh: PackedStringArray = str(arg).trim_prefix("--vice-size=").split("x")
 			if wh.size() == 2: win_size = Vector2i(int(wh[0]), int(wh[1]))
 	if not active:
 		set_process(false)
@@ -184,6 +201,9 @@ func _ready() -> void:
 	if shots_dir != "": DirAccess.make_dir_recursive_absolute(shots_dir)
 	if record_dir != "": DirAccess.make_dir_recursive_absolute(record_dir)
 	_apply_window()
+	if web_embed:
+		get_tree().root.scaling_3d_scale = 0.6  # WebGL 2 / Compatibility renderer: render 3D at 60% and upscale
+		get_tree().root.msaa_3d = Viewport.MSAA_DISABLED
 	_build_hud()
 	_check_started_at = _now()
 	print("[vice] bridge active url=%s room=%s name=%s role=%s" % [url, room_code, nickname, role])
@@ -813,7 +833,6 @@ func _declutter_labels() -> void:
 		lab2.visible = not clash
 		if clash: continue
 		placed.append(sp)
-		lab2.pixel_size = 0.0046 * clampf(float(r[0]) / 9.0, 0.35, 1.0)
 		var dd := float(r[0])
 		var a := 1.0 if _overview else clampf((45.0 - dd) / 14.0, 0.0, 1.0)
 		# Keep labels a sane size on screen: shrink when close, fade out inside 3 m, and stay out of the banner's way.
@@ -1016,7 +1035,7 @@ func _fx_message(from_id: String, to_id: String, kind: String) -> void:
 	var color: Color = MSG_COLOR.get(kind, AQUA)
 	var root := Node3D.new()
 	game.add_child(root)
-	var mat := _glow(color, 6.0)
+	var mat := _glow(color, 2.6)      # bright enough to bloom, low enough to keep the kind's colour
 	var dots: Array = []
 	var n := clampi(int(a.distance_to(b) / 0.8), 12, 80)
 	for i in n:
@@ -1045,6 +1064,7 @@ func _fx_message(from_id: String, to_id: String, kind: String) -> void:
 	light.shadow_enabled = false
 	head.add_child(light)
 	_fx.append({"type": "arc", "root": root, "dots": dots, "head": head, "from": from_id, "to": to_id, "a": a, "b": b, "t": 0.0, "travel": 1.25, "life": 3.2})
+	_last_arc = {"a": a, "b": b}
 	if shots_dir != "" or record_dir != "": print("VICE_FX arc %s %s -> %s  a=%s b=%s dots=%d" % [kind, from_id, to_id, str(a), str(b), n])
 
 ## A wanted bulletin goes out to everyone: a gold ring expands from the officer who issued it.
@@ -1122,8 +1142,6 @@ func _update_fx(dt: float) -> void:
 				f.mat.emission_energy_multiplier = 5.0 * (1.0 - k)
 			"popup":
 				var lab: Label3D = root
-				var pcam := get_viewport().get_camera_3d()
-				if pcam != null: lab.pixel_size = 0.0052 * clampf(pcam.global_position.distance_to(lab.global_position) / 10.0, 0.3, 1.0)
 				lab.position.y = 3.9 + f.t * 0.12
 				var al := clampf((f.life - f.t) / 1.2, 0.0, 1.0)
 				var pcam := get_viewport().get_camera_3d()
@@ -1769,7 +1787,32 @@ func _run_fx_shots() -> void:
 	await get_tree().create_timer(1.8).timeout          # let the server accept the new pose
 	_send({"type": "demo.incident", "incidentType": "SIGHTING", "commandId": _cid("ginc")}, "incident")
 	var tag := want_mode if want_mode != "" else "drex"
-	for step in [["a", 0.75], ["b", 0.45], ["c", 0.5], ["d", 0.6], ["e", 0.9], ["f", 1.5]]:
+	# Wait for the first message arc, then watch it side-on so the whole flight is in frame.
+	var waited := 0.0
+	while _last_arc.is_empty() and waited < 6.0:
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+	var cam := Camera3D.new()
+	cam.far = 3000.0
+	cam.fov = 62.0
+	game.add_child(cam)
+	if not _last_arc.is_empty():
+		var a: Vector3 = _last_arc.a
+		var b: Vector3 = _last_arc.b
+		var mid := (a + b) * 0.5
+		var dir := Vector3(b.x - a.x, 0, b.z - a.z)
+		var span := maxf(dir.length(), 1.0)
+		dir = dir / span
+		var best := mid + Vector3(-dir.z, 0, dir.x) * (span * 0.62 + 6.0)
+		for sgn in [1.0, -1.0]:
+			var cpos: Vector3 = mid + Vector3(-dir.z, 0, dir.x) * (span * 0.62 + 6.0) * float(sgn)
+			if not game.world.collides_at(cpos.x, cpos.z, 2.0):
+				best = cpos
+				break
+		cam.position = Vector3(best.x, 5.5, best.z)
+		cam.look_at(Vector3(mid.x, 5.0, mid.z))
+		cam.current = true
+	for step in [["a", 0.35], ["b", 0.4], ["c", 0.45], ["d", 0.6], ["e", 0.9], ["f", 1.5]]:
 		await get_tree().create_timer(step[1]).timeout
 		await _shot("fx_%s_%s" % [tag, step[0]])
 	print("VICE_SHOTS_OK fx feed=%s" % str(_feed))

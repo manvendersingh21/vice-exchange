@@ -5,7 +5,7 @@ import type {
 } from "@vice/contracts";
 import { CITY_MAP } from "@vice/contracts";
 
-export type ViewMode = "2d" | "3d";
+export type ViewMode = "2d" | "3d" | "world";
 export interface Session { roomCode: string; playerId: string; sessionToken: string; role: HumanRole; isDirector: boolean; walletId: string | null; nickname: string }
 export interface Toast { id: number; text: string; tone: "info" | "good" | "bad"; atMs: number }
 export interface CrashFx { ticker: string; nickname: string; from: number; atMs: number }
@@ -79,7 +79,7 @@ export const useGame = create<GameState>((set, get) => ({
   players: {}, characters: {}, npcs: {}, missions: {}, listings: {}, trades: [], events: [],
   metrics: null, experiments: [], policy: null, providerStatus: null, wallet: null,
   serverTimeMs: 0, tick: 0, lastTick: null, selectedAgentId: null, selectedEventId: null, selectedTicker: null,
-  viewMode: "2d", toasts: [], crash: null,
+  viewMode: "3d", toasts: [], crash: null,
 
   applyJoin(r, nickname) {
     set({ session: { roomCode: r.roomCode, playerId: r.playerId, sessionToken: r.sessionToken, role: r.role, isDirector: r.isDirector, walletId: r.walletId, nickname }, wallet: r.wallet });

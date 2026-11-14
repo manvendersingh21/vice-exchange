@@ -322,7 +322,7 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
       }
     }
 
-    let carN = 0;
+    let carN = 0, carsPlaced = false;
     map.buildings.forEach((b, bi) => {
       if (b.x1 - b.x0 < 6) return;
       const pts: Array<[number, number, number]> = [];
@@ -352,10 +352,9 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
           }
         }
       });
-      const park = (x: number, z: number, ry: number) => {
+      // Parked cars are SOLID: they come from the shared map, where the server stops players and NPCs at their footprints.
+      const park = (x: number, z: number, ry: number, col: string) => {
         carN++;
-        if (inB(x, z, 1.2) || keepClear(x, z, 6) || x < 4 || x > map.width - 4 || z > z1 - 3 || hash(carN * 5.3 + bi) > 0.5) return;
-        const col = CAR_COLORS[Math.floor(hash(carN * 3.7) * CAR_COLORS.length)] ?? "#888";
         const e = new THREE.Euler(0, ry, 0);
         const at = (lx: number, ly: number, lz: number) => { const v = new THREE.Vector3(lx, ly, lz).applyEuler(e); return { x: x + v.x, y: ly, z: z + v.z }; };
         const suv = hash(carN) > 0.6;
@@ -366,8 +365,7 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
         for (const [wx, wz] of [[1.35, 0.9], [1.35, -0.9], [-1.35, 0.9], [-1.35, -0.9]] as const) wheels.push({ ...at(wx, 0.34, wz), sx: 0.68, sy: 0.24, sz: 0.68, color: "#0d0d10", ry, rx: Math.PI / 2 });
         for (const wz of [0.62, -0.62]) { head.push({ ...at(2.16, 0.7, wz), sx: 0.06, sy: 0.14, sz: 0.36, color: "#fff2cf", ry }); tail.push({ ...at(-2.16, 0.74, wz), sx: 0.06, sy: 0.12, sz: 0.4, color: "#ff1a1a", ry }); }
       };
-      for (let x = b.x0 + 3; x <= b.x1 - 3; x += 6.2) park(x, b.z1 + 2.75, hash(x) > 0.5 ? 0 : Math.PI);
-      for (let x = b.x0 + 4; x <= b.x1 - 3; x += 6.2) park(x, b.z0 - 2.75, hash(x + 9) > 0.5 ? 0 : Math.PI);
+      if (!carsPlaced) { carsPlaced = true; for (const c of map.cars ?? []) park(c.x, c.z, c.heading === 90 ? Math.PI / 2 : 0, c.tone); }
     });
 
     const wz = map.water[0]?.z0 ?? map.height - 6;

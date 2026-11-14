@@ -1,4 +1,4 @@
-import type { MapView, Rect, Vec2 } from "./types";
+import type { MapView, ParkedCar, Rect, Vec2 } from "./types";
 
 export const RULES_VERSION = "h0.2";
 export const DEFAULT_ROOM_CODE = "VICE-42";
@@ -86,6 +86,36 @@ export const CITY_MAP: MapView = {
     { id: "b_hotel", label: "Bayfront Hotel", x0: 68, z0: 60, x1: 86, z1: 70, height: 16, tone: "pink" },
     { id: "b_diner", label: "Lighthouse Diner", x0: 98, z0: 60, x1: 112, z1: 70, height: 5, tone: "aqua" },
   ],
+  // Solid parked cars along the kerbs (2.75 m off the building line). Never on a job spot, spawn, NPC post,
+  // patrol waypoint or road centre line; every road keeps well over 3 m clear between them.
+  cars: [
+    { id: "car_01", x: 12, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#c0222d" },
+    { id: "car_02", x: 20, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#1b1c21" },
+    { id: "car_03", x: 43, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#8a2fa0" },
+    { id: "car_04", x: 51, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#1f56b8" },
+    { id: "car_05", x: 72, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#e09a1f" },
+    { id: "car_06", x: 102, z: 24.75, length: 4.4, width: 1.9, heading: 0, tone: "#a7b0ba" },
+    { id: "car_07", x: 11, z: 31.25, length: 4.4, width: 1.9, heading: 0, tone: "#ece8de" },
+    { id: "car_08", x: 23, z: 31.25, length: 4.4, width: 1.9, heading: 0, tone: "#2a9f88" },
+    { id: "car_09", x: 72, z: 31.25, length: 4.4, width: 1.9, heading: 0, tone: "#c0222d" },
+    { id: "car_10", x: 105, z: 31.25, length: 4.4, width: 1.9, heading: 0, tone: "#1b1c21" },
+    { id: "car_11", x: 14, z: 50.75, length: 4.4, width: 1.9, heading: 0, tone: "#8a2fa0" },
+    { id: "car_12", x: 22, z: 50.75, length: 4.4, width: 1.9, heading: 0, tone: "#1f56b8" },
+    { id: "car_13", x: 73, z: 50.75, length: 4.4, width: 1.9, heading: 0, tone: "#e09a1f" },
+    { id: "car_14", x: 103, z: 50.75, length: 4.4, width: 1.9, heading: 0, tone: "#a7b0ba" },
+    { id: "car_15", x: 13, z: 57.25, length: 4.4, width: 1.9, heading: 0, tone: "#ece8de" },
+    { id: "car_16", x: 74, z: 57.25, length: 4.4, width: 1.9, heading: 0, tone: "#2a9f88" },
+    { id: "car_17", x: 82, z: 57.25, length: 4.4, width: 1.9, heading: 0, tone: "#c0222d" },
+    { id: "car_18", x: 104, z: 57.25, length: 4.4, width: 1.9, heading: 0, tone: "#1b1c21" },
+    { id: "car_19", x: 28.75, z: 13, length: 4.4, width: 1.9, heading: 90, tone: "#8a2fa0" },
+    { id: "car_20", x: 35.25, z: 16, length: 4.4, width: 1.9, heading: 90, tone: "#1f56b8" },
+    { id: "car_21", x: 65.25, z: 41, length: 4.4, width: 1.9, heading: 90, tone: "#e09a1f" },
+    { id: "car_22", x: 95.25, z: 40, length: 4.4, width: 1.9, heading: 90, tone: "#a7b0ba" },
+    { id: "car_23", x: 28.75, z: 45.6, length: 4.4, width: 1.9, heading: 90, tone: "#ece8de" },
+    { id: "car_24", x: 65.25, z: 65, length: 4.4, width: 1.9, heading: 90, tone: "#2a9f88" },
+    { id: "car_25", x: 28.75, z: 65, length: 4.4, width: 1.9, heading: 90, tone: "#c0222d" },
+    { id: "car_26", x: 95.25, z: 65, length: 4.4, width: 1.9, heading: 90, tone: "#1b1c21" },
+  ],
   districts: [
     { id: "d_marina", label: "Marina", x: 47, z: 64 },
     { id: "d_plaza", label: "Neon Plaza", x: 52, z: 46 },
@@ -131,3 +161,11 @@ export function hasLineOfSight(a: Vec2, b: Vec2, map: MapView = CITY_MAP): boole
   return !map.buildings.some((r) => segmentHitsRect(a, b, r));
 }
 export function wantedLevel(heat: number): number { return Math.min(5, Math.floor(heat / 20)); }
+
+/** Axis-aligned footprint of a parked car. */
+export function carRect(c: ParkedCar): Rect {
+  const hx = (c.heading === 0 ? c.length : c.width) / 2, hz = (c.heading === 0 ? c.width : c.length) / 2;
+  return { x0: c.x - hx, z0: c.z - hz, x1: c.x + hx, z1: c.z + hz };
+}
+/** Footprints of every solid parked car on a map (empty for maps without cars). */
+export function carRects(map: MapView = CITY_MAP): Rect[] { return (map.cars ?? []).map(carRect); }

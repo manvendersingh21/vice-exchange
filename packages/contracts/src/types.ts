@@ -32,9 +32,13 @@ export type PriceReason =
   | "LISTING_OPENED" | "MISSION" | "HEAT" | "ESCAPE" | "TRADE" | "SURVIVAL_TICK" | "SENTIMENT_DECAY" | "CAPTURE";
 
 export interface Building extends Rect { id: string; label: string; height: number; tone: "pink" | "aqua" | "purple" | "sand" | "teal" }
+/** A parked car. Solid: the server stops players and NPCs at its footprint (it does not block line of sight). */
+export interface ParkedCar { id: string; x: number; z: number; length: number; width: number; /** 0 = length along x, 90 = length along z. */ heading: 0 | 90; /** Paint colour (hex). */ tone: string }
 export interface MapView {
   name: string; width: number; height: number;
   walkable: Rect; water: Rect[]; buildings: Building[];
+  /** Solid parked cars. Optional so older snapshots still type-check. */
+  cars?: ParkedCar[];
   districts: Array<{ id: string; label: string; x: number; z: number }>;
 }
 
