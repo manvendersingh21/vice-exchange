@@ -20,7 +20,7 @@ export const TL = {
 } as const;
 
 /** Chart band as fractions of the viewport (the stage CSS positions the text around these). */
-export const CHART = { x0: 0.05, x1: 0.95, yTop: 0.415, yBase: 0.8, xEdge: 0.72, xZero: 0.8 } as const;
+export const CHART = { x0: 0.05, x1: 0.95, yTop: 0.415, yBase: 0.8, xEdge: 0.745, xZero: 0.83 } as const;
 
 export interface Pt { x: number; y: number }
 export interface Box { x: number; y: number; w: number; h: number }
@@ -154,9 +154,11 @@ export function buildFx(input: FxInput, layout: FxLayout): FxModel {
   const scale = Math.max(0.6, Math.min(w / 1600, h / 900) * 1.0);
   const last = Math.max(0, input.lastSpot);
   const pts = input.history.filter((p) => p.spot > 0 && Number.isFinite(p.t));
-  let pMax = Math.max(last, input.reference ?? 0, 1);
-  for (const p of pts) pMax = Math.max(pMax, p.spot, p.reference);
-  pMax *= 1.1;
+  // The axis follows the spot price only, so the fall always uses the full height of the chart. The reference
+  // value usually sits above the spot (heat discounts it); where it leaves the band it fades out and is labelled.
+  let pMax = Math.max(last, 1);
+  for (const p of pts) pMax = Math.max(pMax, p.spot);
+  pMax *= 1.14;
 
   const g = {
     x0: w * CHART.x0, x1: w * CHART.x1, yTop: h * CHART.yTop, yBase: h * CHART.yBase,
@@ -388,12 +390,18 @@ function drawChart(ctx: CanvasRenderingContext2D, m: FxModel, t: number): void {
   trace(ctx, m.hist);
   ctx.lineTo(m.hist[m.hist.length - 1]!.x, m.yBase); ctx.lineTo(m.hist[0]!.x, m.yBase); ctx.closePath();
   ctx.fillStyle = fill; ctx.fill();
-  // reference value: dashed purple, like the market panel
+  // reference value: dashed purple, like the market panel; it fades where it climbs out of the band
   if (m.ref.length >= 2) {
+    const band = m.yBase - m.yTop;
+    const rg = ctx.createLinearGradient(0, m.yTop - band * 0.04, 0, m.yTop + band * 0.16);
+    rg.addColorStop(0, `rgba(${PURPLE},0)`); rg.addColorStop(1, `rgba(${PURPLE},.9)`);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, m.yTop - band * 0.04, xr, band * 1.04); ctx.clip();
     ctx.setLineDash([10 * m.scale, 8 * m.scale]);
     trace(ctx, m.ref);
-    ctx.strokeStyle = `rgba(${PURPLE},.85)`; ctx.lineWidth = Math.max(1.5, 2 * m.scale); ctx.lineJoin = "round"; ctx.stroke();
+    ctx.strokeStyle = rg; ctx.lineWidth = Math.max(1.5, 2 * m.scale); ctx.lineJoin = "round"; ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
   }
   // spot history: the red bleeds backwards from the cliff as the price falls
   const grad = ctx.createLinearGradient(m.x0, 0, m.xEdge, 0);
@@ -406,15 +414,21 @@ function drawChart(ctx: CanvasRenderingContext2D, m: FxModel, t: number): void {
 
   if (m.refY != null && m.reference != null && reveal >= 1) {
     const a = clamp01((t - TL.fall0 + 60) / 200);
-    const fs = Math.max(13, Math.round(15 * m.scale));
+    const fs = Math.max(14, Math.round(16 * m.scale));
+    const inBand = m.refY >= m.yTop + fs * 1.6;
     ctx.font = `800 ${fs}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
-    ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.setLineDash([4 * m.scale, 7 * m.scale]);
-    ctx.strokeStyle = `rgba(${PURPLE},${0.4 * a})`; ctx.lineWidth = Math.max(1, 1.5 * m.scale);
-    ctx.beginPath(); ctx.moveTo(m.xEdge, m.refY); ctx.lineTo(m.x1, m.refY); ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    if (inBand) {
+      ctx.setLineDash([4 * m.scale, 7 * m.scale]);
+      ctx.strokeStyle = `rgba(${PURPLE},${0.45 * a})`; ctx.lineWidth = Math.max(1, 1.5 * m.scale);
+      ctx.beginPath(); ctx.moveTo(m.xEdge, m.refY); ctx.lineTo(m.x1, m.refY); ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.fillStyle = `rgba(${PURPLE},${a})`;
-    ctx.fillText(`REFERENCE V$${Math.round(m.reference).toLocaleString("en-US")}`, m.xZero + 14 * m.scale, m.refY - fs * 0.9);
+    const label = `REFERENCE V$${Math.round(m.reference).toLocaleString("en-US")}`;
+    // Above the band the reference is off this chart's scale: say so rather than draw it in the wrong place.
+    ctx.fillText(inBand ? label : `${label} ▲ off scale`, m.x1, inBand ? m.refY - fs * 0.9 : m.yTop + fs * 0.5);
+    ctx.textAlign = "left";
   }
   if (t <= TL.fall0) {
     if (reveal < 1) return;

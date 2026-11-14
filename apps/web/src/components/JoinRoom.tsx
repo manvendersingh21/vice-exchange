@@ -10,8 +10,8 @@ const ROLES: Array<{ id: HumanRole; title: string; blurb: string }> = [
   { id: "SPECTATOR", title: "Spectator", blurb: "Watch the swarm think. Inspect every decision." },
 ];
 
-/** Deep link for demos: /?nick=Ace&role=OUTLAW&room=VICE-42&auto=1 (add &create=1 to create, &view=3d for the 3D city). */
-function readLink(): { nick: string; role: HumanRole | null; room: string; auto: boolean; create: boolean } {
+/** Deep link for demos: /?nick=Ace&role=OUTLAW&room=VICE-42&auto=1 (add &create=1 to create, &view=3d for the 3D city, &director=<secret> for demo-director controls). */
+function readLink(): { nick: string; role: HumanRole | null; room: string; auto: boolean; create: boolean; director: string } {
   const q = new URLSearchParams(window.location.search);
   const r = (q.get("role") ?? "").toUpperCase();
   const view = (q.get("view") ?? "").toLowerCase();
@@ -19,6 +19,7 @@ function readLink(): { nick: string; role: HumanRole | null; room: string; auto:
   return {
     nick: (q.get("nick") ?? "").slice(0, 16), role: r === "OUTLAW" || r === "HUNTER" || r === "SPECTATOR" ? r : null,
     room: (q.get("room") ?? "").toUpperCase().slice(0, 12), auto: q.get("auto") === "1", create: q.get("create") === "1",
+    director: (q.get("director") ?? "").slice(0, 128),
   };
 }
 // React StrictMode runs mount effects twice in development; an automatic join must happen once per page load.
@@ -30,7 +31,7 @@ export function JoinRoom() {
   const [nickname, setNickname] = useState(link.nick || saved?.nickname || "");
   const [roomCode, setRoomCode] = useState(link.room || saved?.roomCode || DEFAULT_ROOM_CODE);
   const [role, setRole] = useState<HumanRole>(link.role ?? saved?.role ?? "OUTLAW");
-  const [secret, setSecret] = useState("");
+  const [secret, setSecret] = useState(link.director);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

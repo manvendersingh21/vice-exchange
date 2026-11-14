@@ -72,7 +72,7 @@ h3 { font-size: 11px; letter-spacing: .1em; margin: 12px 0 6px; color: var(--pur
 .crash-ticker { font-size: 64px; font-weight: 900; color: var(--bad); letter-spacing: .08em; text-shadow: 0 0 30px rgba(255,84,104,.8); }
 .crash-line { font-size: 16px; letter-spacing: .3em; font-weight: 800; } .crash-price { font-size: 40px; font-weight: 900; } .crash-price b { color: var(--bad); } .crash-price s { color: var(--dim); }
 .crash-sub { color: #ffd0d6; }
-.toasts { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); display: grid; gap: 6px; z-index: 20; pointer-events: none; }
+.toasts { position: fixed; top: 98px; left: 32%; transform: translateX(-50%); display: grid; gap: 6px; z-index: 20; pointer-events: none; }
 .toast { background: var(--pane2); border: 1px solid var(--line); border-left: 4px solid var(--aqua); padding: 7px 14px; border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
 .toast.good { border-left-color: var(--good); } .toast.bad { border-left-color: var(--bad); }
 
@@ -140,3 +140,8 @@ h3 { font-size: 11px; letter-spacing: .1em; margin: 12px 0 6px; color: var(--pur
 @keyframes crashIn { from { opacity: 0; transform: scale(1.15); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media (max-width: 1100px) { .grid { grid-template-columns: minmax(0, 1fr) 330px; } .ev { grid-template-columns: 44px 58px 1fr; } .ev-type { display: none; } }
+
+/* wow components */
+.swarm-host { flex: 1; min-height: 0; position: relative; }
+.swarm-idle { flex: 1 1 0; min-height: 220px; height: calc(100% - 78px); position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.inspector { display: flex; flex-direction: column; }

@@ -17,7 +17,21 @@ Owns `apps/web/src/scene/three/**` only. Built to the FINAL `CityViewProps` in `
   rises automatically when a building would block the shot. Otherwise (spectator / captured) -> orbit camera.
 - Click an NPC -> `onSelect(id, "npc")`; a human -> `onSelect(id, "character")`; empty space -> `onSelect(null, null)`.
 - QUALITY button (bottom-right, saved in localStorage `vice.city3d.quality`): HIGH = soft sun shadows + HDR bloom + up to 1.75x DPR;
-  LOW = none of those. HIGH auto-drops to LOW after 4 s below 22 fps.
+  LOW = none of those. HIGH auto-drops to LOW after 5 s below 20 fps.
+
+## Startup and stability (measured in headless Chrome on Metal, real app, 1600x900)
+- Before: canvas blank at 6 s, city only by ~15 s. Cause: `webglAvailable()` created a new WebGL context on every render (151 contexts
+  in 16 s), so the browser kept evicting the scene's context (33 losses); plus ~2.8 s of blocking shader links.
+- After: 1 scene context, 0 losses, first lit frame 300-650 ms after the view mounts (0.5-1.0 s after page load; 4.7 s once while
+  the machine was at load 11). Shaders compile in parallel while a loading veil is up. 8 programs for the scene, 61 fps on HIGH.
+- Labels are one DOM overlay, not drei `Html` roots: the React "synchronously unmount a root" error and the `removeChild` exception are gone.
+- No dynamic lights and few program families, so nothing recompiles mid-game.
+- Console is clean. The THREE.Clock deprecation line comes from inside React Three Fiber; that single line is filtered in ThreeCity.tsx.
+
+## Files
+`ThreeCity.tsx` (view, camera, labels, pipeline), `World.tsx` (city, sky, lighting), `Life.tsx` (ambient traffic, pedestrians, sea
+glitter; cosmetic only), `Entities.tsx` (figures, beacons, arcs), `materials.ts` (shared programs, keyhole fade), `SceneBoundary.tsx`.
+Capture driver: `.swarm/repro/city3d/shot.mjs`; captures in `.swarm/repro/city3d/captures/`.
 
 ## Look (all procedural, no external assets)
 PBR materials lit by a low sunset sun plus image-based lighting baked from the procedural sky (PMREM), ACES tone mapping, bloom on

@@ -5,7 +5,8 @@ import type { HumanRole } from "@vice/contracts";
 import { createRoomFactory } from "../src/engine/compose";
 import { createMemoryPersistence } from "../src/engine/fallbacks";
 import { FakeClock } from "../src/engine/util";
-import { RoomManager } from "../src/rooms/RoomManager";
+import { EMPTY_ROOM_TTL_MS, MAX_ROOMS, RoomManager } from "../src/rooms/RoomManager";
+import { isLocal } from "../src/transport/socket";
 
 const managers: RoomManager[] = [];
 afterEach(() => { for (const m of managers.splice(0)) m.stop(); });
@@ -17,9 +18,9 @@ function setup(directorSecret = "") {
   managers.push(rooms);
   const room = rooms.ensureDefault();
   let n = 0;
-  const join = (nickname: string, role: HumanRole = "OUTLAW", extra: { sessionToken?: string; directorSecret?: string; socketId?: string } = {}) => {
-    const { socketId, ...rest } = extra;
-    const r = rooms.join({ type: "room.join", roomCode: DEFAULT_ROOM_CODE, nickname, role, requestId: `req-${++n}`, ...rest }, socketId ?? `sock-${n}`);
+  const join = (nickname: string, role: HumanRole = "OUTLAW", extra: { sessionToken?: string; directorSecret?: string; socketId?: string; local?: boolean } = {}) => {
+    const { socketId, local, ...rest } = extra;
+    const r = rooms.join({ type: "room.join", roomCode: DEFAULT_ROOM_CODE, nickname, role, requestId: `req-${++n}`, ...rest }, socketId ?? `sock-${n}`, local ?? true);
     if (!r.ok || !r.result) throw new Error(`join failed: ${r.error?.code}`);
     return r.result;
   };
@@ -157,5 +158,53 @@ describe("stored history across server restarts (NFR-005)", () => {
     expect(store.findRoomId(DEFAULT_ROOM_CODE)).toBeTruthy();
     expect(p2.id).toBe(p1.id); // per-room ids repeat across boots, which is exactly why the room id must not
     store.close();
+  });
+});
+
+describe("audit fixes", () => {
+  it("a LAN visitor who joins the default room first does not become director; the machine's own browser still does", () => {
+    const { join } = setup();
+    expect(join("Visitor", "OUTLAW", { local: false }).isDirector).toBe(false);
+    expect(join("Host", "HUNTER", { local: true }).isDirector).toBe(true);
+    expect(join("Later", "SPECTATOR", { local: true }).isDirector).toBe(false);
+  });
+  it("a LAN visitor still directs with the secret", () => {
+    const { join } = setup("s3cret-director-token");
+    expect(join("Visitor", "OUTLAW", { local: false, directorSecret: "s3cret-director-token" }).isDirector).toBe(true);
+  });
+  it("recognises only this machine's own browser as local", () => {
+    const sock = (address: string, headers: Record<string, string> = {}) => ({ handshake: { address, headers } });
+    expect(isLocal(sock("127.0.0.1"))).toBe(true);
+    expect(isLocal(sock("::ffff:127.0.0.1", { origin: "http://localhost:5173" }))).toBe(true);
+    expect(isLocal(sock("192.168.1.20"))).toBe(false);
+    expect(isLocal(sock("127.0.0.1", { origin: "http://192.168.1.20:5173" }))).toBe(false); // LAN page through the dev proxy
+    expect(isLocal(sock("127.0.0.1", { "x-forwarded-for": "192.168.1.20" }))).toBe(false);
+  });
+  it("refuses room.create beyond the cap, promptly, and never hangs however many are requested", () => {
+    const { rooms } = setup();
+    const create = (i: number) => rooms.join({ type: "room.create", nickname: `P${i}`, role: "SPECTATOR", requestId: `mk-${i}` }, `sock-mk-${i}`);
+    const started = Date.now();
+    const results = Array.from({ length: 200 }, (_, i) => create(i));
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(results.filter((r) => r.ok)).toHaveLength(MAX_ROOMS - 1); // the default room takes one place
+    expect(results[MAX_ROOMS - 1]!.error).toEqual({ code: "ROOM_FULL", message: "Too many rooms" });
+    expect(rooms.rooms.size).toBe(MAX_ROOMS);
+  });
+  it("closes created rooms left empty, never the default room, and frees their place", () => {
+    const { rooms } = setup();
+    const made = rooms.join({ type: "room.create", nickname: "Ace", role: "OUTLAW", requestId: "mk-a" }, "sock-a");
+    const room = made.room!; const code = room.code;
+    rooms.sweep(1_000);
+    expect(rooms.get(code)).toBeTruthy(); // occupied
+    room.engine.disconnect(made.playerId!);
+    rooms.sweep(2_000);
+    rooms.sweep(2_000 + EMPTY_ROOM_TTL_MS - 1);
+    expect(rooms.get(code)).toBeTruthy();
+    rooms.sweep(2_000 + EMPTY_ROOM_TTL_MS);
+    expect(rooms.get(code)).toBeUndefined();
+    expect(room.timer).toBeNull();
+    rooms.sweep(10 * EMPTY_ROOM_TTL_MS);
+    expect(rooms.get(DEFAULT_ROOM_CODE)).toBeTruthy();
+    expect(rooms.join({ type: "room.join", roomCode: code, nickname: "Ace", role: "OUTLAW", requestId: "mk-b" }, "sock-b").error?.code).toBe("ROOM_NOT_FOUND");
   });
 });

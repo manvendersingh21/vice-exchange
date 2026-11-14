@@ -24,6 +24,14 @@ function loadQuality(): Quality { try { return localStorage.getItem(QUALITY_KEY)
 /** Startup timings (ms since page navigation), exposed for measurement as window.__city3d. */
 const marks = { mountMs: 0, compiledMs: 0, firstFrameMs: 0, programs: 0 };
 if (typeof window !== "undefined") (window as unknown as { __city3d: typeof marks }).__city3d = marks;
+// React Three Fiber 9 still constructs THREE.Clock internally, which three r187 flags as deprecated on every mount.
+// Nothing in this view can change that, so drop that one known line and pass everything else through untouched.
+if (typeof console !== "undefined" && !(console.warn as { __city3d?: boolean }).__city3d) {
+  const warn = console.warn.bind(console);
+  const filtered = (...args: unknown[]) => { if (typeof args[0] === "string" && args[0].startsWith("THREE.Clock: This module has been deprecated")) return; warn(...args); };
+  (filtered as { __city3d?: boolean }).__city3d = true;
+  console.warn = filtered;
+}
 
 /**
  * Owns rendering. Boot: every shader program is compiled in parallel off the main thread while the loop is paused
@@ -35,7 +43,7 @@ function Pipeline({ high, phase, onRun, onReady, onSlow }: { high: boolean; phas
     if (!high) return null;
     const c = new EffectComposer(gl);
     c.addPass(new RenderPass(scene, camera));
-    c.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.26, 0.6, 1.0));
+    c.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.18, 0.55, 1.1));
     c.addPass(new OutputPass());
     return c;
   }, [gl, scene, camera, high]);

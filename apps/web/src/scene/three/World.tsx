@@ -139,7 +139,7 @@ function signTexture(label: string, color: string): THREE.CanvasTexture {
 function asphaltMaps() {
   const S = 512, [cc, g] = canvas(S, S), [rc, rg] = canvas(S, S);
   g.fillStyle = "#4a4953"; g.fillRect(0, 0, S, S);
-  rg.fillStyle = "rgb(0,120,0)"; rg.fillRect(0, 0, S, S);
+  rg.fillStyle = "rgb(0,150,0)"; rg.fillRect(0, 0, S, S);
   for (let i = 0; i < 3500; i++) {
     const x = hash(i) * S, y = hash(i + 0.5) * S, v = 50 + hash(i * 3) * 55;
     g.fillStyle = `rgba(${v},${v},${v + 8},0.45)`; g.fillRect(x, y, 2, 2);
@@ -147,7 +147,7 @@ function asphaltMaps() {
   for (let i = 0; i < 46; i++) {
     const x = hash(i * 11) * S, y = hash(i * 13) * S, r = 12 + hash(i * 17) * 40;
     const pg = rg.createRadialGradient(x, y, 0, x, y, r);
-    pg.addColorStop(0, "rgba(0,10,0,1)"); pg.addColorStop(0.7, "rgba(0,30,0,0.85)"); pg.addColorStop(1, "rgba(0,120,0,0)");
+    pg.addColorStop(0, "rgba(0,72,0,1)"); pg.addColorStop(0.7, "rgba(0,86,0,0.85)"); pg.addColorStop(1, "rgba(0,150,0,0)");
     rg.fillStyle = pg; rg.beginPath(); rg.ellipse(x, y, r * 1.6, r, hash(i) * 3, 0, 7); rg.fill();
     const dg = g.createRadialGradient(x, y, 0, x, y, r);
     dg.addColorStop(0, "rgba(40,38,52,0.6)"); dg.addColorStop(1, "rgba(40,38,52,0)");
@@ -159,8 +159,8 @@ function asphaltMaps() {
 }
 function waterOrm() {
   const [c, g] = canvas(256, 256);
-  g.fillStyle = "rgb(0,26,235)"; g.fillRect(0, 0, 256, 256); // smooth, metallic
-  for (let i = 0; i < 420; i++) { g.fillStyle = `rgba(0,${50 + hash(i) * 120},235,0.4)`; g.fillRect(hash(i * 3) * 256, hash(i * 7) * 256, 14 + hash(i) * 46, 1 + hash(i * 5) * 2); }
+  g.fillStyle = "rgb(0,108,235)"; g.fillRect(0, 0, 256, 256); // glossy, metallic (never mirror-smooth: the sun highlight would white out)
+  for (let i = 0; i < 420; i++) { g.fillStyle = `rgba(0,${120 + hash(i) * 90},235,0.45)`; g.fillRect(hash(i * 3) * 256, hash(i * 7) * 256, 14 + hash(i) * 46, 1 + hash(i * 5) * 2); }
   const t = tex(c, false); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(56, 56);
   return t;
 }
@@ -176,26 +176,28 @@ const SKY_FRAG = `varying vec3 vDir; uniform vec3 sunDir; uniform float disc;
     float h = max(d.y, 0.0);
     float s = max(dot(d, sunDir), 0.0);
     // dusk atmosphere: hot horizon that turns gold toward the sun, magenta mid sky, indigo zenith
-    vec3 zenith = vec3(0.045, 0.06, 0.24);
-    vec3 midSky = vec3(0.40, 0.16, 0.50);
-    vec3 horizon = mix(vec3(0.80, 0.33, 0.40), vec3(1.45, 0.62, 0.22), pow(s, 2.5));
+    vec3 zenith = vec3(0.012, 0.018, 0.085);
+    vec3 midSky = vec3(0.20, 0.045, 0.24);
+    vec3 horizon = mix(vec3(0.60, 0.13, 0.12), vec3(1.25, 0.42, 0.07), pow(s, 2.2));
     vec3 col = mix(horizon, midSky, smoothstep(0.0, 0.26, h));
     col = mix(col, zenith, smoothstep(0.18, 0.8, h));
-    col += vec3(1.2, 0.5, 0.16) * pow(s, 7.0) * 0.5;
+    col += vec3(1.0, 0.36, 0.08) * pow(s, 7.0) * 0.45;
     if (d.y > 0.01) {
       vec2 uv = d.xz / (d.y + 0.14) * 0.85;
       float c = smoothstep(0.50, 0.82, fbm(uv + vec2(3.1, 1.7)));
-      vec3 cloud = mix(vec3(0.26, 0.13, 0.34), vec3(1.35, 0.55, 0.32), pow(s, 1.6) * 0.85 + 0.15);
+      vec3 cloud = mix(vec3(0.10, 0.035, 0.14), vec3(1.0, 0.30, 0.12), pow(s, 1.6) * 0.85 + 0.15);
       col = mix(col, cloud, c * smoothstep(0.02, 0.22, d.y) * 0.8);
       float star = step(0.9978, h21(floor(d.xz / (d.y + 0.2) * 220.0)));
       col += vec3(star) * smoothstep(0.5, 0.95, h) * 0.9;
     }
     // the sun: a hot disc with a wide corona
     float core = smoothstep(0.9988, 0.9993, s);
-    col = mix(col, vec3(5.0, 2.4, 0.8), core * disc);
-    col += vec3(1.4, 0.65, 0.22) * pow(s, 260.0) * 0.9 * disc;
-    if (d.y < 0.0) col = mix(col, vec3(0.10, 0.07, 0.18), smoothstep(0.0, -0.1, d.y));
+    col = mix(col, vec3(2.4, 1.15, 0.35), core * disc);
+    col += vec3(1.2, 0.5, 0.15) * pow(s, 260.0) * 0.4 * disc;
+    if (d.y < 0.0) col = mix(col, vec3(0.05, 0.03, 0.10), smoothstep(0.0, -0.1, d.y));
     gl_FragColor = vec4(col, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
   }`;
 function skyMaterial(disc: number) {
   return new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false, fog: false, uniforms: { sunDir: { value: SUN_DIR }, disc: { value: disc } }, vertexShader: SKY_VERT, fragmentShader: SKY_FRAG });
@@ -212,7 +214,7 @@ function Atmosphere({ center }: { center: [number, number, number] }) {
     envScene.add(new THREE.Mesh(envGeo, envMat));
     const rt = pmrem.fromScene(envScene, 0.02, 0.1, 200);
     scene.environment = rt.texture;
-    scene.environmentIntensity = 1.0;
+    scene.environmentIntensity = 1.7;
     envMat.dispose(); envGeo.dispose(); pmrem.dispose();
     return () => { scene.environment = null; rt.dispose(); };
   }, [gl, scene]);
@@ -389,7 +391,7 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
     return { kerbs, ledges, neon, marks, trunks, fronds, metal, lamps, pools, roofKit, tanks, wood, carBody, carGlass, wheels, head, tail, sigRed, sigGreen, bins, planters, shrubs, far, farLights };
   }, [map]);
 
-  const signs = useMemo(() => map.buildings.filter((b) => b.x1 - b.x0 >= 6).map((b, i) => ({ b, mat: light("#ffffff", 1.9, { map: signTexture(b.label, TONES[b.tone].neon) }), flicker: i === 1 || i === 6 })), [map]);
+  const signs = useMemo(() => map.buildings.filter((b) => b.x1 - b.x0 >= 6).map((b, i) => ({ b, mat: light("#ffffff", 1.35, { map: signTexture(b.label, TONES[b.tone].neon) }), flicker: i === 1 || i === 6 })), [map]);
   useEffect(() => () => signs.forEach((s) => { s.mat.map?.dispose(); s.mat.dispose(); }), [signs]);
   const ground = useMemo(() => {
     const a = asphaltMaps();
@@ -417,7 +419,7 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
     signs.forEach((s, i) => {
       if (!s.flicker) return;
       const n = Math.sin(t * 31 + i * 7) * Math.sin(t * 17.3 + i) * Math.sin(t * 4.1 + i * 3);
-      s.mat.color.setScalar(n > 0.55 ? 0.45 : 1.9 + Math.sin(t * 60) * 0.12);
+      s.mat.color.setScalar(n > 0.55 ? 0.4 : 1.35 + Math.sin(t * 60) * 0.1);
     });
   });
 
@@ -425,9 +427,9 @@ export function World({ map, shadows }: { map: MapView; shadows: boolean }) {
     <group>
       <Atmosphere center={[cx, 0, cz]} />
       <fogExp2 attach="fog" args={["#7d4a78", 0.0027]} />
-      <hemisphereLight args={["#cdb2f5", "#d98a6a", 1.4]} />
+      <hemisphereLight args={["#c9a6f2", "#e08a62", 2.3]} />
       <directionalLight
-        ref={sun} color="#ffa765" intensity={6.5} castShadow={shadows}
+        ref={sun} color="#ff9d57" intensity={4.2} castShadow={shadows}
         position={[cx + SUN_DIR.x * 200, SUN_DIR.y * 200, cz + SUN_DIR.z * 200]}
         shadow-mapSize={[2048, 2048]} shadow-bias={-0.0006} shadow-normalBias={0.08} shadow-radius={4}
       />

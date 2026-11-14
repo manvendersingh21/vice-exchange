@@ -263,6 +263,27 @@ function RoleGlyph({ role }: { role: NpcRole }) {
   }
 }
 
+/** One line of text; when it does not fit it glides to its end and back (plain ellipsis under reduced motion). */
+function Ticker({ text }: { text: string }) {
+  const wrap = useRef<HTMLSpanElement>(null);
+  const inner = useRef<HTMLSpanElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    const w = wrap.current, i = inner.current;
+    if (!w || !i) return;
+    const measure = () => {
+      const over = i.offsetWidth - w.clientWidth;
+      setShift(over > 2 ? over : 0);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(w);
+    return () => ro.disconnect();
+  }, [text]);
+  const style = shift ? ({ "--dspot-shift": `${-shift}px`, "--dspot-ticker-ms": `${Math.round(Math.max(2600, shift * 30))}ms` } as CSSProperties) : undefined;
+  return <span className={`dspot-line-text${shift ? " is-ticker" : ""}`} ref={wrap}><span ref={inner} style={style}>{text}</span></span>;
+}
+
 function offsetWithin(el: HTMLElement, root: HTMLElement): { x: number; y: number } {
   let x = 0, y = 0;
   let cur: HTMLElement | null = el;
@@ -439,8 +460,8 @@ const Card = memo(function Card({ card, selected, reduce, dwellMs, onSelect, onH
             </svg>
           </div>
           <div className="dspot-id">
-            <div className="dspot-name">{card.name}</div>
-            <div className="dspot-sub"><b>{card.role}</b>{card.why ? <span>{card.why}</span> : null}</div>
+            <div className="dspot-who"><span className="dspot-name">{card.name}</span><b className="dspot-role">{card.role}</b></div>
+            <div className="dspot-sub">{card.why ?? `${card.role.toLowerCase()} is weighing a decision`}</div>
           </div>
           <div className="dspot-clock">
             <div className="dspot-clock-big">
@@ -478,7 +499,7 @@ const Card = memo(function Card({ card, selected, reduce, dwellMs, onSelect, onH
 
         <div className={`dspot-line k-${v.lineKind}`}>
           <span className="dspot-line-tag">{v.lineTag}</span>
-          <span className="dspot-line-text">{v.lineText}</span>
+          <Ticker text={v.lineText} />
         </div>
 
         <div className="dspot-foot">

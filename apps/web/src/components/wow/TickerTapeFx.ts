@@ -13,12 +13,15 @@ export interface TapeFx {
   burst(x: number, color: string, count?: number): void;
   /** Two fronts racing outwards from x. */
   shock(x: number, color: string): void;
+  /** A glow that swells at the right edge: "news incoming". */
+  edge(color: string): void;
   clear(): void;
 }
 
 interface Comet { x: number; v: number; rail: 0 | 1; rgb: string; len: number }
 interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; rgb: string; size: number }
 interface Shock { x: number; r: number; v: number; rgb: string; life: number; max: number }
+interface Edge { rgb: string; life: number; max: number }
 
 function rgbOf(color: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(color.trim());
@@ -30,7 +33,7 @@ function rgbOf(color: string): string {
 export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
   const ctx = canvas.getContext("2d");
   let W = 0, H = 0, dpr = 1, dirty = false;
-  const comets: Comet[] = [], sparks: Spark[] = [], shocks: Shock[] = [];
+  const comets: Comet[] = [], sparks: Spark[] = [], shocks: Shock[] = [], edges: Edge[] = [];
   const unit = () => Math.max(1, H / 34);
 
   return {
@@ -67,10 +70,15 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
       if (!ctx || W <= 0 || shocks.length > 6) return;
       shocks.push({ x, r: 0, v: Math.max(W, 900) * 1.7, rgb: rgbOf(color), life: 720, max: 720 });
     },
-    clear() { comets.length = 0; sparks.length = 0; shocks.length = 0; dirty = true; },
+    edge(color) {
+      if (!ctx || W <= 0) return;
+      if (edges.length > 3) edges.shift();
+      edges.push({ rgb: rgbOf(color), life: 900, max: 900 });
+    },
+    clear() { comets.length = 0; sparks.length = 0; shocks.length = 0; edges.length = 0; dirty = true; },
     frame(dt) {
       if (!ctx) return;
-      const busy = comets.length + sparks.length + shocks.length > 0;
+      const busy = comets.length + sparks.length + shocks.length + edges.length > 0;
       if (!busy && !dirty) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, W, H);
@@ -91,17 +99,17 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
         const x0 = Math.min(tail, c.x);
         // the streak on the rail, then a taller, fainter halo around it
         ctx.fillStyle = g;
-        ctx.fillRect(x0, y - 1.1 * u, c.len, 2.2 * u);
-        ctx.globalAlpha = 0.3;
-        ctx.fillRect(x0, y - 4.5 * u, c.len, 9 * u);
+        ctx.fillRect(x0, y - 1.5 * u, c.len, 3 * u);
+        ctx.globalAlpha = 0.34;
+        ctx.fillRect(x0, y - 6 * u, c.len, 12 * u);
         ctx.globalAlpha = 1;
         // a wide wash of light under the head, so the text it passes over picks up the colour
-        const wr = H * 1.9;
+        const wr = H * 2.4;
         const wash = ctx.createRadialGradient(c.x, y, 0, c.x, y, wr);
-        wash.addColorStop(0, `rgba(${c.rgb},0.30)`); wash.addColorStop(1, `rgba(${c.rgb},0)`);
+        wash.addColorStop(0, `rgba(${c.rgb},0.42)`); wash.addColorStop(1, `rgba(${c.rgb},0)`);
         ctx.fillStyle = wash; ctx.fillRect(c.x - wr, 0, wr * 2, H);
         // the hot head
-        const hr = 11 * u;
+        const hr = 13 * u;
         const head = ctx.createRadialGradient(c.x, y, 0, c.x, y, hr);
         head.addColorStop(0, "rgba(255,255,255,0.95)"); head.addColorStop(0.25, `rgba(${c.rgb},0.85)`); head.addColorStop(1, `rgba(${c.rgb},0)`);
         ctx.fillStyle = head; ctx.fillRect(c.x - hr, y - hr, hr * 2, hr * 2);
@@ -122,6 +130,18 @@ export function createTapeFx(canvas: HTMLCanvasElement): TapeFx {
         ctx.fillRect(Math.min(p.x, p.x - Math.sign(p.vx) * trail), p.y - p.size / 2, trail, p.size);
         ctx.fillStyle = `rgba(255,255,255,${(a * 0.9).toFixed(3)})`;
         ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      }
+
+      for (let i = edges.length - 1; i >= 0; i--) {
+        const g0 = edges[i]!;
+        g0.life -= dt;
+        if (g0.life <= 0) { edges.splice(i, 1); continue; }
+        const k = g0.life / g0.max;                 // 1 -> 0
+        const a = Math.sin(Math.min(1, (1 - k) * 4) * Math.PI / 2) * k; // quick swell, slow fade
+        const reach = 170 * u;
+        const g = ctx.createLinearGradient(W - reach, 0, W, 0);
+        g.addColorStop(0, `rgba(${g0.rgb},0)`); g.addColorStop(0.75, `rgba(${g0.rgb},${(0.42 * a).toFixed(3)})`); g.addColorStop(1, `rgba(255,255,255,${(0.75 * a).toFixed(3)})`);
+        ctx.fillStyle = g; ctx.fillRect(W - reach, 0, reach, H);
       }
 
       for (let i = shocks.length - 1; i >= 0; i--) {

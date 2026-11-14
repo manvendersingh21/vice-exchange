@@ -16,9 +16,8 @@ npx tsx apps/server/test/liveClient.ts 36              # live: outlaw joins a pr
 npx tsx apps/server/test/liveExperiment.ts 75          # live: three-mode experiment, prints the result rows (real provider calls)
 npm run replay -- VICE-42                              # STORE's offline replay of the newest recorded VICE-42 run
 ```
-ENGINE left ONE instance running on :3001 in `tsx watch` mode (log: scratchpad `engine-server.log`). It restarts whenever any server
-file is saved, which resets rooms and invalidates session tokens. For the demo stop it and start a non-watching one:
-`kill $(lsof -nP -iTCP:3001 -sTCP:LISTEN -t)` then `npx tsx apps/server/src/index.ts`.
+Since 13:08 the instance on :3001 is a plain `npx tsx src/index.ts` (no file watching, log: scratchpad `engine-server.log`), started
+on the current code. It does not pick up later edits: restart it with `kill $(lsof -nP -iTCP:3001 -sTCP:LISTEN -t)` and the command above.
 With DEMO_DIRECTOR_SECRET empty the server prints a per-run director secret at boot (join form field) as the recovery path.
 
 ## Files
@@ -85,7 +84,8 @@ round trip per provider call as recorded on each decision trace; time to capture
 - `publishBulletin` is idempotent for 20 s per character. WANTED_STATUS_CHANGED and the heat repricing are emitted before BULLETIN_PUBLISHED,
   so traders deciding on the bulletin already see the repriced market.
 - `player.pose` (external 3D clients): inside CITY_MAP.walkable and distance / time since the last accepted position (or spawn) <= 45 m/s,
-  otherwise MOVE_REJECTED. Buildings are not checked for pose clients.
+  otherwise MOVE_REJECTED. Browser socket clients are also refused a pose inside a building ("Inside a building"); world-bridge
+  clients (socket id `bridge:*`) are not, because their 3D world owns its own geometry.
 - Meta shadow: SHADOW_META (default on, acts only when both keys are set and the room is in drex mode). The Meta answer lands on
   `trace.shadow`, is persisted, shows in `agent.update`, and `metrics.shadow = { compared, agreed, drexP50Ms, metaP50Ms }` (null until one
   comparison completes). It is never applied. Experiment lanes run with it off.
@@ -96,6 +96,6 @@ round trip per provider call as recorded on each decision trace; time to capture
 ## Not done / known limits
 - A disconnected player's avatar and ticker stay in the world (capturable, still accruing survival value) until reclaimed by nickname or `demo.reset`.
 - The live room's Meta shadow and an experiment's Meta lane share Meta's real 60 requests/min; running both at once can produce labeled Meta fallbacks.
-- `player.pose` is bounds- and speed-checked only. NPCs do not avoid each other or players.
+- `player.pose` from bridge (Godot) clients is bounds- and speed-checked only. NPCs do not avoid each other or players.
 - The in-memory event log keeps the latest 20,000 events per run; the full log is in SQLite.
 - Experiments are one run per mode: a demonstration, not statistical evidence (the result carries that caveat).

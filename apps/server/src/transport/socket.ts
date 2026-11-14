@@ -4,6 +4,22 @@ import type { CommandAck, ExperimentResult } from "@vice/contracts";
 import type { Room, RoomManager } from "../rooms/RoomManager";
 
 interface Session { roomCode: string; playerId: string }
+
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i;
+/**
+ * True only for a browser on the server's own machine: the TCP peer is loopback, no proxy reports a remote client,
+ * and the page itself was loaded from localhost (a LAN visitor coming through the dev proxy has a LAN origin).
+ */
+export function isLocal(socket: { handshake: { address: string; headers: Record<string, string | string[] | undefined> } }): boolean {
+  const h = socket.handshake;
+  if (!LOOPBACK.test(h.address ?? "")) return false;
+  const fwd = String(h.headers["x-forwarded-for"] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (fwd.some((a) => !LOOPBACK.test(a))) return false;
+  const origin = h.headers.origin;
+  if (typeof origin === "string" && origin) { try { return LOCAL_HOST.test(new URL(origin).hostname); } catch { return false; } }
+  return true;
+}
 const RATE = { perSecond: 40, burst: 80 };
 
 export function attachTransport(io: Server, rooms: RoomManager): { flush(room: Room): void; experiment(r: ExperimentResult): void; wire(room: Room): void } {
@@ -73,7 +89,7 @@ export function attachTransport(io: Server, rooms: RoomManager): { flush(room: R
             void socket.leave(old.roomCode); sessions.delete(socket.id);
             if (oldRoom) flush(oldRoom);
           }
-          const r = rooms.join(cmd, socket.id);
+          const r = rooms.join(cmd, socket.id, isLocal(socket));
           if (r.ok && r.room && r.playerId) {
             wire(r.room);
             sessions.set(socket.id, { roomCode: r.room.code, playerId: r.playerId });

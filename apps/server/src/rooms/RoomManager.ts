@@ -5,7 +5,11 @@ import type { BuiltRoom, RoomBuildOpts } from "../engine/compose";
 import type { RoomEngine } from "../engine/RoomEngine";
 import type { PlayerState } from "../domain";
 
-export interface Room extends BuiltRoom { code: string; timer: NodeJS.Timeout | null; hasDirector: boolean }
+export interface Room extends BuiltRoom { code: string; timer: NodeJS.Timeout | null; hasDirector: boolean; emptySinceMs: number | null }
+/** Live rooms at once, the default room included. Each room costs a 10 Hz timer and a decision scheduler. */
+export const MAX_ROOMS = 8;
+/** A created room with no connected human for this long is closed. The default room never is. */
+export const EMPTY_ROOM_TTL_MS = 3 * 60_000;
 type JoinCmd = Extract<ClientCommand, { type: "room.create" | "room.join" }>;
 
 export class RoomManager {
@@ -19,15 +23,36 @@ export class RoomManager {
     // Stored history is keyed by roomId, so a restarted server never collides with an earlier VICE-42.
     const roomId = `${code}@${Date.now().toString(36)}${randomBytes(2).toString("hex")}`;
     const built = this.build({ roomId, code, seed, mode });
-    const room: Room = { ...built, code, timer: null, hasDirector: false };
+    const room: Room = { ...built, code, timer: null, hasDirector: false, emptySinceMs: null };
     room.timer = setInterval(() => {
       try { room.engine.tick(); this.onTick?.(room); } catch (err) { console.error("[room] tick failed", code, err); }
+      if (room.engine.state.tick % 50 === 0) this.sweep();
     }, Math.round(1000 / this.opts.tickHz));
     this.rooms.set(code, room);
     return room;
   }
   ensureDefault(): Room { return this.rooms.get(DEFAULT_ROOM_CODE) ?? this.create(DEFAULT_ROOM_CODE, DEFAULT_SEED); }
   get(code: string): Room | undefined { return this.rooms.get(code.toUpperCase()); }
+
+  /** Stops a room's timer and pending decisions and forgets it. Its recorded history stays in the store. */
+  close(code: string): void {
+    const room = this.rooms.get(code);
+    if (!room || code === DEFAULT_ROOM_CODE) return;
+    if (room.timer) clearInterval(room.timer);
+    room.timer = null;
+    try { room.scheduler.cancelAll(); } catch { /* already idle */ }
+    this.rooms.delete(code);
+  }
+  /** Closes created rooms that have had no connected human for EMPTY_ROOM_TTL_MS. */
+  sweep(now: number = Date.now()): void {
+    for (const room of [...this.rooms.values()]) {
+      if (room.code === DEFAULT_ROOM_CODE) continue;
+      const occupied = Object.values(room.engine.state.players).some((p) => p.connected && !p.isBot);
+      if (occupied) { room.emptySinceMs = null; continue; }
+      room.emptySinceMs ??= now;
+      if (now - room.emptySinceMs >= EMPTY_ROOM_TTL_MS) this.close(room.code);
+    }
+  }
 
   private secretOk(given: string | undefined): boolean {
     const want = this.opts.directorSecret;
@@ -52,14 +77,22 @@ export class RoomManager {
    *  2. the nickname + role of a DISCONNECTED player reclaims that player, its character and its ticker with a new
    *     token. A reclaim never carries director rights by itself: only the director secret does;
    *  3. otherwise a fresh player (a taken nickname is suffixed).
-   * A room code alone never grants director rights.
+   * A room code alone never grants director rights: the boot-time default room's free director slot goes only to the
+   * first browser on the server's own machine (`local`); everyone else needs the director secret.
    */
-  join(cmd: JoinCmd, socketId: string): CommandAck<JoinResult> & { room?: Room; playerId?: string } {
+  join(cmd: JoinCmd, socketId: string, local = false): CommandAck<JoinResult> & { room?: Room; playerId?: string } {
     const id = cmd.requestId;
     let room: Room | undefined; let creator = false;
     if (cmd.type === "room.create") {
-      let code: string;
-      do { code = `VICE-${10 + ((this.n++ * 37 + Math.floor(Math.random() * 90)) % 90)}`; } while (this.rooms.has(code));
+      this.sweep();
+      if (this.rooms.size >= MAX_ROOMS) return { ok: false, id, error: { code: "ROOM_FULL", message: "Too many rooms" } };
+      // Bounded search for a free code: never loops forever, whatever the number of rooms.
+      let code: string | null = null;
+      for (let i = 0; i < 200 && code === null; i++) {
+        const candidate = `VICE-${10 + ((this.n++ * 37 + Math.floor(Math.random() * 90)) % 90)}`;
+        if (!this.rooms.has(candidate)) code = candidate;
+      }
+      if (code === null) return { ok: false, id, error: { code: "ROOM_FULL", message: "Too many rooms" } };
       room = this.create(code, cmd.seed ?? DEFAULT_SEED); creator = true;
     } else {
       room = this.get(cmd.roomCode);
@@ -84,9 +117,9 @@ export class RoomManager {
       }
     }
     if (humans.filter((p) => p.connected).length >= RULES.maxPlayersPerRoom) return { ok: false, id, error: { code: "ROOM_FULL", message: "Room is full" } };
-    // The creator directs their room. The boot-time default room has no creator, so its first browser joiner directs it
-    // (external world-bridge clients never take that slot). The slot is not handed out again once taken.
-    const isDirector = creator || secret || (!room.hasDirector && room.code === DEFAULT_ROOM_CODE && !socketId.startsWith("bridge:"));
+    // The creator directs their room. The boot-time default room has no creator, so the first browser on the server's own
+    // machine directs it (never a LAN visitor, never a world-bridge client). The slot is not handed out again once taken.
+    const isDirector = creator || secret || (local && !room.hasDirector && room.code === DEFAULT_ROOM_CODE && !socketId.startsWith("bridge:"));
     if (isDirector) room.hasDirector = true;
     const p = engine.addPlayer({ nickname: this.uniqueNickname(cmd.nickname, humans), role: cmd.role, isDirector, sessionToken: randomBytes(24).toString("hex"), socketId });
     return done(p.id);

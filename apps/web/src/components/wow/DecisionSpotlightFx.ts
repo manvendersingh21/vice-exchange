@@ -103,7 +103,8 @@ function sprite(color: string): HTMLCanvasElement {
   return s;
 }
 
-const TINTS = ["#2ff3e0", "#ff4fa3", "#a56bff"];
+// Pending streams never use aqua: that colour is reserved for a live Drex result.
+const TINTS = ["#ff4fa3", "#a56bff", "#e6eaff"];
 const SPLIT = 0.36; // share of a stream's life spent on the curve from the sigil to its track
 
 export function createCardFx(canvas: HTMLCanvasElement): CardFx {
@@ -175,13 +176,13 @@ export function createCardFx(canvas: HTMLCanvasElement): CardFx {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalCompositeOperation = "destination-out";
     ctx.globalAlpha = 1;
-    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, dt * 11)})`;
+    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, dt * 9)})`;
     ctx.fillRect(0, 0, g.w, g.h);
     ctx.globalCompositeOperation = "lighter";
 
     // ---- thought streams ----
     if (mode === "think" && g.tracks.length) {
-      spawnCarry += dt * 15 * g.tracks.length;
+      spawnCarry += dt * 21 * g.tracks.length;
       while (spawnCarry >= 1) {
         spawnCarry -= 1;
         streams.push({
@@ -197,8 +198,9 @@ export function createCardFx(canvas: HTMLCanvasElement): CardFx {
       const p = streamPoint(s, s.t);
       if (!p) { streams.splice(i, 1); continue; }
       const fadeIn = Math.min(1, s.t / 0.08), fadeOut = Math.min(1, (1 - s.t) / 0.22);
-      const a = fadeIn * fadeOut * (mode === "think" ? 0.9 : 0.45);
-      blit(sprite(s.tint < 0 ? roleColor : TINTS[s.tint]!), p.x, p.y, s.size * 1.9, a);
+      const onTrack = s.t < SPLIT ? 0.5 : 1; // dimmer while crossing the label column, brightest on the track
+      const a = fadeIn * fadeOut * onTrack * (mode === "think" ? 0.95 : 0.45);
+      blit(sprite(s.tint < 0 ? roleColor : TINTS[s.tint]!), p.x, p.y, s.size * (s.t < SPLIT ? 1.0 : 1.35), a);
     }
 
     // ---- comets riding the leading edge of each growing bar ----

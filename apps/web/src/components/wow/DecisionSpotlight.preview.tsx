@@ -233,7 +233,7 @@ function Backdrop() {
 function Preview() {
   const selected = useGame((s) => s.selectedAgentId);
   useEffect(() => {
-    const scenes: Record<string, () => void> = { busy: busyStory, think, gallery1, gallery2, gallery3 };
+    const scenes: Record<string, () => void> = { busy: busyStory, think, gallery1, gallery2, gallery3, idle: () => undefined };
     (scenes[SCENE] ?? busyStory)();
     return () => { for (const t of timers) window.clearTimeout(t); timers.length = 0; };
   }, []);

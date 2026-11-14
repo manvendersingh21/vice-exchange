@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { RULES } from "@vice/contracts";
 import type { GameEvent, MessageKind, NpcRole, Vec2 } from "@vice/contracts";
 import type { CityViewProps } from "../types";
+import { createAmbient } from "./ambient";
+import type { Ambient } from "./ambient";
 import { drawStaticCity, PALETTE } from "./cityArt";
 
 interface Smooth { x: number; z: number; tx: number; tz: number; seen: number }
@@ -33,6 +35,9 @@ export function CanvasCity(props: CityViewProps) {
     let w = 0, h = 0, dpr = 1;
     let staticLayer: HTMLCanvasElement | null = null;
     let staticKey = "";
+    // Decorative city life (traffic, strollers, neon, water). Never reads or writes game state.
+    let ambient: Ambient | null = null;
+    const ambientView = { x: 0, z: 0, scale: 1, width: 0, height: 0 };
     let raf = 0;
     let last = performance.now();
 
@@ -164,6 +169,7 @@ export function CanvasCity(props: CityViewProps) {
         staticLayer.width = map.width * S; staticLayer.height = map.height * S;
         drawStaticCity(staticLayer.getContext("2d")!, map, S);
         staticKey = key;
+        try { ambient = createAmbient(map, 42, { reducedMotion: reduced }); } catch (e) { ambient = null; console.error("[scene] ambient layer disabled", e); }
       }
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -171,19 +177,12 @@ export function CanvasCity(props: CityViewProps) {
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(staticLayer, sx(0), sz(0), map.width * cam.scale, map.height * cam.scale);
 
-      // animated water shimmer
-      if (!reduced) {
-        ctx.save(); ctx.strokeStyle = "rgba(120,240,255,0.22)"; ctx.lineWidth = 1;
-        for (const r of map.water) for (let i = 0; i < 5; i++) {
-          const z = r.z0 + 1 + i * ((r.z1 - r.z0 - 1) / 5);
-          ctx.beginPath();
-          for (let x = r.x0; x <= r.x1; x += 2) {
-            const y = sz(z + Math.sin(x * 0.35 + now / 700 + i) * 0.25);
-            if (x === r.x0) ctx.moveTo(sx(x), y); else ctx.lineTo(sx(x), y);
-          }
-          ctx.stroke();
-        }
-        ctx.restore();
+      // ambient life underneath every real entity
+      ambientView.x = cam.x; ambientView.z = cam.z; ambientView.scale = cam.scale; ambientView.width = w; ambientView.height = h;
+      if (ambient) {
+        try { ambient.update(dt * 1000); ambient.drawUnder(ctx, ambientView); }
+        catch (e) { ambient = null; console.error("[scene] ambient layer disabled", e); }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
 
       const m = cam.scale; // px per metre
@@ -281,6 +280,12 @@ export function CanvasCity(props: CityViewProps) {
           capturePrompt = { x, y: y + r + 14 };
       }
       if (capturePrompt) text("[E] CAPTURE", capturePrompt.x, capturePrompt.y, "#ffffff", "700 13px ui-sans-serif, system-ui, sans-serif");
+
+      // light in the air (haze, beams): after the agents, never opaque
+      if (ambient) {
+        try { ambient.drawOver(ctx, ambientView); } catch (e) { ambient = null; console.error("[scene] ambient layer disabled", e); }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
 
       // --- effects ---
       for (let i = fx.length - 1; i >= 0; i--) {

@@ -701,12 +701,12 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
 
   // ---------------------------------------------------------------- palms
   const drawPalms = (ctx: CanvasRenderingContext2D): void => {
-    ctx.fillStyle = "#000000"; ctx.globalAlpha = 0.26;
+    ctx.fillStyle = "#000000"; ctx.globalAlpha = 0.2;
     for (let i = 0; i < nPalm; i++) {
       const o = i * 6, x = palm[o]!, z = palm[o + 1]!, r = palm[o + 2]!;
       if (x < vx0 - 4 || x > vx1 + 4 || z < vz0 - 4 || z > vz1 + 4) continue;
       const gust = reduced ? 0.3 : 0.5 + 0.5 * Math.sin(t * 0.55 - x * 0.07 + z * 0.05);
-      ctx.beginPath(); ctx.arc(x + 0.75 + gust * 0.3, z + 0.9, r * 0.8, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 0.6 + gust * 0.3, z + 0.72, r * 0.82, 0, TAU); ctx.fill();
     }
     ctx.globalAlpha = 1;
     for (let i = 0; i < nPalm; i++) {
@@ -738,8 +738,8 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
     ctx.fillStyle = "#f3f0ff"; ctx.beginPath(); ctx.arc(x, z, 0.5, 0, TAU); ctx.fill();
     ctx.fillStyle = "#1a1d36"; ctx.beginPath(); ctx.arc(x, z, 0.33, 0, TAU); ctx.fill();
     ctx.globalCompositeOperation = "lighter";
-    ctx.globalAlpha = 0.9; ctx.drawImage(glowWarm, x - 3.4, z - 3.4, 6.8, 6.8);
-    ctx.globalAlpha = 1; ctx.drawImage(glowWarm, x - 0.6, z - 0.6, 1.2, 1.2);
+    ctx.globalAlpha = 0.38; ctx.drawImage(glowWarm, x - 3.6, z - 3.6, 7.2, 7.2);
+    ctx.globalAlpha = 1; ctx.drawImage(glowWarm, x - 0.5, z - 0.5, 1, 1);
     ctx.globalCompositeOperation = "source-over";
   };
 
@@ -790,7 +790,7 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       for (let k = 0; k < 2; k++) {
         const a = (k ? 0.5 : -2.4) + (reduced ? 0 : 0.85 * Math.sin(t * (k ? 0.23 : 0.17) + k * 2));
         ctx.save(); ctx.translate(sky.x + (k ? 5.5 : -5.5), sky.z); ctx.rotate(a);
-        ctx.globalAlpha = 0.5; ctx.drawImage(beamSky[k]!, 0, -1.9, 30, 3.8);
+        ctx.globalAlpha = 0.62; ctx.drawImage(beamSky[k]!, 0, -1.25, 30, 2.5);
         ctx.restore();
         ctx.globalAlpha = 0.9; ctx.drawImage(glowSoft, sky.x + (k ? 5.5 : -5.5) - 0.8, sky.z - 0.8, 1.6, 1.6);
       }
@@ -812,12 +812,16 @@ export function createAmbient(map: MapView, seed = 42, options: AmbientOptions =
       const x = gull[o]! + Math.cos(a) * gull[o + 2]!, z = gull[o + 1]! + Math.sin(a) * gull[o + 3]!;
       if (x < vx0 - 2 || x > vx1 + 2 || z < vz0 - 2 || z > vz1 + 2) continue;
       const hx = -Math.sin(a) * gull[o + 2]! * w, hz = Math.cos(a) * gull[o + 3]! * w, hl = Math.hypot(hx, hz) || 1;
-      const dx = hx / hl, dz = hz / hl, flap = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 5.5 + i * 1.9), span = 0.5 + 0.18 * flap, back = 0.2 + 0.16 * flap;
+      const dx = hx / hl, dz = hz / hl, flap = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 5.5 + i * 1.9);
+      const span = 0.78 + 0.2 * flap, back = 0.1 + 0.34 * flap, cf = 0.26, cs = span * 0.42;
       for (let pass = 0; pass < 2; pass++) {
-        const px = pass ? x : x + 0.9, pz = pass ? z : z + 1.1;
-        ctx.strokeStyle = pass ? "#eef4ff" : "#000000"; ctx.globalAlpha = pass ? 0.92 : 0.24; ctx.lineWidth = pass ? 0.13 : 0.17;
+        const px = pass ? x : x + 1.1, pz = pass ? z : z + 1.3;
+        ctx.strokeStyle = pass ? "#f4f8ff" : "#000000"; ctx.globalAlpha = pass ? 0.95 : 0.22; ctx.lineWidth = pass ? 0.17 : 0.22;
+        // two arched wings meeting at the body
         ctx.beginPath();
-        ctx.moveTo(px - dx * back - dz * span, pz - dz * back + dx * span); ctx.lineTo(px, pz); ctx.lineTo(px - dx * back + dz * span, pz - dz * back - dx * span);
+        ctx.moveTo(px - dx * back - dz * span, pz - dz * back + dx * span);
+        ctx.quadraticCurveTo(px + dx * cf - dz * cs, pz + dz * cf + dx * cs, px, pz);
+        ctx.quadraticCurveTo(px + dx * cf + dz * cs, pz + dz * cf - dx * cs, px - dx * back + dz * span, pz - dz * back - dx * span);
         ctx.stroke();
       }
     }

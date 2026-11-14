@@ -25,6 +25,18 @@ interface Job {
 }
 interface Health { calls: number[]; inFlight: number; failures: number; circuitOpenUntil: number | null; lastOkAtMs: number | null; lastErrorType: string | null }
 
+/**
+ * Provider error text is vendor-controlled, is broadcast to every client and is stored in SQLite. Strip anything
+ * shaped like a credential (in case a gateway echoes the Authorization header) and bound its length.
+ */
+export function redactSecrets(message: string): string {
+  return message
+    .replace(/nace_sk_[A-Za-z0-9_-]+/g, "[redacted-key]")
+    .replace(/LLM[|_][0-9]{6,}[|_][A-Za-z0-9_-]+/g, "[redacted-key]")
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .slice(0, 300);
+}
+
 export function stateHash(state: unknown): string {
   return createHash("sha256").update(JSON.stringify(state) ?? "null").digest("hex").slice(0, 16);
 }
@@ -109,7 +121,7 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
     if (job.done) return;
     const t = job.trace;
     t.status = status; t.decisionSource = "fallback"; t.chosenAction = valid(job.req, job.req.safeAction);
-    t.errorType = errorType; t.errorMessage = message;
+    t.errorType = errorType; t.errorMessage = redactSecrets(message);
     // No provider answer was used: confidence/probabilities stay null by construction.
     finish(job);
   }

@@ -69,7 +69,9 @@ var _intro_cam: Camera3D = null
 var _cine_cam: Camera3D = null
 var _cine_t := 0.0
 var _cine_anchor := Vector3.ZERO
+var _cine_look := Vector3.ZERO
 var ambient := true             # --vice-no-ambient turns the extra background life off
+var fx_shots := false           # --vice-fx (with --vice-shots): photograph an incident's message arc, ring and popup
 var _fps_t := 0.0
 var _look_done := false
 var _fx: Array = []
@@ -167,6 +169,7 @@ func _ready() -> void:
 		elif arg == "--vice-hunt": hunt = true
 		elif arg == "--vice-keep-hud": keep_city_hud = true
 		elif arg == "--vice-no-ambient": ambient = false
+		elif arg == "--vice-fx": fx_shots = true
 		elif arg.begins_with("--vice-look="): look = arg.trim_prefix("--vice-look=")
 		elif arg.begins_with("--vice-record="):
 			record_dir = arg.trim_prefix("--vice-record="); windowed = true
@@ -474,6 +477,8 @@ func _on_ack(msg: Dictionary) -> void:
 		"respawn":
 			if ok: need_teleport = true
 			else: _set_notice("RESPAWN: %s" % str(err.get("message", "rejected")), 3.0)
+		"incident":
+			print("[vice] demo.incident -> %s" % ["ok" if ok else str(err)])
 		"mode":
 			print("[vice] demo.setMode %s -> %s" % [want_mode, "ok" if ok else str(err)])
 		"trade":
@@ -808,7 +813,14 @@ func _declutter_labels() -> void:
 		lab2.visible = not clash
 		if clash: continue
 		placed.append(sp)
-		var a := 1.0 if _overview else clampf((45.0 - float(r[0])) / 14.0, 0.0, 1.0)
+		lab2.pixel_size = 0.0046 * clampf(float(r[0]) / 9.0, 0.35, 1.0)
+		var dd := float(r[0])
+		var a := 1.0 if _overview else clampf((45.0 - dd) / 14.0, 0.0, 1.0)
+		# Keep labels a sane size on screen: shrink when close, fade out inside 3 m, and stay out of the banner's way.
+		a *= clampf((dd - 1.5) / 1.5, 0.0, 1.0)
+		if hud_banner_box != null and hud_banner_box.visible: a = 0.0
+		var sc := 1.0 if _overview else clampf(dd / 10.0, 0.22, 1.0)
+		lab2.scale = Vector3(sc, sc, sc)
 		lab2.modulate.a = a
 		lab2.outline_modulate.a = 0.95 * a
 
@@ -1004,14 +1016,16 @@ func _fx_message(from_id: String, to_id: String, kind: String) -> void:
 	var color: Color = MSG_COLOR.get(kind, AQUA)
 	var root := Node3D.new()
 	game.add_child(root)
-	var mat := _glow(color, 5.0)
+	var mat := _glow(color, 6.0)
 	var dots: Array = []
-	var n := clampi(int(a.distance_to(b) / 1.4), 8, 46)
+	var n := clampi(int(a.distance_to(b) / 0.8), 12, 80)
 	for i in n:
 		var dot := MeshInstance3D.new()
 		var sm := SphereMesh.new()
-		sm.radius = 0.075
-		sm.height = 0.15
+		sm.radius = 0.15
+		sm.height = 0.3
+		sm.radial_segments = 8
+		sm.rings = 4
 		dot.mesh = sm
 		dot.material_override = mat
 		dot.visible = false
@@ -1019,18 +1033,19 @@ func _fx_message(from_id: String, to_id: String, kind: String) -> void:
 		dots.append(dot)
 	var head := MeshInstance3D.new()
 	var hm := SphereMesh.new()
-	hm.radius = 0.24
-	hm.height = 0.48
+	hm.radius = 0.42
+	hm.height = 0.84
 	head.mesh = hm
 	head.material_override = mat
 	root.add_child(head)
 	var light := OmniLight3D.new()
 	light.light_color = color
-	light.light_energy = 3.0
-	light.omni_range = 9.0
+	light.light_energy = 5.0
+	light.omni_range = 12.0
 	light.shadow_enabled = false
 	head.add_child(light)
-	_fx.append({"type": "arc", "root": root, "dots": dots, "head": head, "from": from_id, "to": to_id, "a": a, "b": b, "t": 0.0, "travel": 1.15, "life": 2.6})
+	_fx.append({"type": "arc", "root": root, "dots": dots, "head": head, "from": from_id, "to": to_id, "a": a, "b": b, "t": 0.0, "travel": 1.25, "life": 3.2})
+	if shots_dir != "" or record_dir != "": print("VICE_FX arc %s %s -> %s  a=%s b=%s dots=%d" % [kind, from_id, to_id, str(a), str(b), n])
 
 ## A wanted bulletin goes out to everyone: a gold ring expands from the officer who issued it.
 func _fx_bulletin(issuer_id: String) -> void:
@@ -1039,7 +1054,7 @@ func _fx_bulletin(issuer_id: String) -> void:
 	if a == Vector3.INF: return
 	var ring := MeshInstance3D.new()
 	var tm := TorusMesh.new()
-	tm.inner_radius = 0.985
+	tm.inner_radius = 0.996
 	tm.outer_radius = 1.0
 	ring.mesh = tm
 	var mat := _glow(MSG_COLOR["BULLETIN"], 5.0)
@@ -1066,7 +1081,7 @@ func _fx_decision(agent_id: String, action: String, source: String, conf_txt: St
 	lab.position = Vector3(0, 3.9, 0)
 	e.node.add_child(lab)
 	e["popup"] = lab
-	_fx.append({"type": "popup", "root": lab, "t": 0.0, "life": 5.5})
+	_fx.append({"type": "popup", "root": lab, "t": 0.0, "life": 7.0})
 
 func _update_fx(dt: float) -> void:
 	var keep: Array = []
@@ -1086,7 +1101,7 @@ func _update_fx(dt: float) -> void:
 				if b != Vector3.INF: f.b = b
 				var pa: Vector3 = f.a
 				var pb: Vector3 = f.b
-				var lift := clampf(pa.distance_to(pb) * 0.2, 2.0, 16.0)
+				var lift := clampf(pa.distance_to(pb) * 0.28, 3.0, 20.0)
 				var prog := clampf(f.t / f.travel, 0.0, 1.0)
 				var fade := clampf((f.life - f.t) / 0.9, 0.0, 1.0)
 				var dots: Array = f.dots
@@ -1107,8 +1122,17 @@ func _update_fx(dt: float) -> void:
 				f.mat.emission_energy_multiplier = 5.0 * (1.0 - k)
 			"popup":
 				var lab: Label3D = root
-				lab.position.y = 3.9 + f.t * 0.16
+				var pcam := get_viewport().get_camera_3d()
+				if pcam != null: lab.pixel_size = 0.0052 * clampf(pcam.global_position.distance_to(lab.global_position) / 10.0, 0.3, 1.0)
+				lab.position.y = 3.9 + f.t * 0.12
 				var al := clampf((f.life - f.t) / 1.2, 0.0, 1.0)
+				var pcam := get_viewport().get_camera_3d()
+				if pcam != null:
+					var pd := pcam.global_position.distance_to(lab.global_position)
+					var ps := clampf(pd / 11.0, 0.2, 1.0)
+					lab.scale = Vector3(ps, ps, ps)
+					al *= clampf((pd - 1.5) / 1.5, 0.0, 1.0) * clampf((50.0 - pd) / 12.0, 0.0, 1.0)
+				if hud_banner_box != null and hud_banner_box.visible: al = 0.0
 				lab.modulate.a = al
 				lab.outline_modulate.a = 0.95 * al
 	_fx = keep
@@ -1463,13 +1487,38 @@ func _direct_camera(mec: Dictionary) -> void:
 				best = Vector3(cx, 3.3, cz)
 				break
 		_cine_cam.position = best
+		_cine_look = Vector3(pp.x - 2.0, 1.5, pp.z - 0.5)
 		_cine_cam.current = true
 	_cine_t += dt
+	var chaser := Vector3.INF
+	for id in entities.keys():
+		if entities[id].kind == "POLICE" and entities[id].activity == "PURSUE": chaser = entities[id].pos
+	if chaser != Vector3.INF and not _capture_shot:
+		# two-shot: stand off to the side of the line between the officer and the outlaw
+		var mid: Vector3 = (pp + chaser) * 0.5
+		var dir := Vector3(chaser.x - pp.x, 0, chaser.z - pp.z)
+		var span := maxf(dir.length(), 0.1)
+		dir = dir / span
+		var off := maxf(9.0, span * 0.75 + 5.0)
+		var best_pos: Vector3 = _cine_cam.position
+		var best_d := 1e9
+		for sgn in [-1.0, 1.0]:
+			var cpos := Vector3(mid.x - dir.z * off * sgn, 3.6, mid.z + dir.x * off * sgn)
+			if game.world.collides_at(cpos.x, cpos.z, 1.5): continue
+			var dd: float = cpos.distance_to(_cine_cam.position)
+			if dd < best_d:
+				best_d = dd
+				best_pos = cpos
+		_cine_cam.position = _cine_cam.position.lerp(best_pos, clampf(dt * 2.2, 0.0, 1.0))
+		_cine_look = _cine_look.lerp(Vector3(mid.x, 1.5, mid.z), clampf(dt * 3.0, 0.0, 1.0))
+		_cine_cam.look_at(_cine_look)
+		return
+	_cine_look = _cine_look.lerp(Vector3(_cine_anchor.x - 2.0, 1.5, _cine_anchor.z - 0.5), clampf(dt * 2.0, 0.0, 1.0))
 	# slow push-in toward the outlaw
 	var home: Vector3 = _cine_cam.position
 	var want := Vector3(lerpf(home.x, _cine_anchor.x, 0.012 * dt * 10.0), 3.3 + 0.5 * sin(_cine_t * 0.2), lerpf(home.z, _cine_anchor.z, 0.006 * dt * 10.0))
-	if Vector2(want.x - _cine_anchor.x, want.z - _cine_anchor.z).length() > 7.5: _cine_cam.position = want
-	_cine_cam.look_at(Vector3(_cine_anchor.x - 2.0, 1.5, _cine_anchor.z - 0.5))
+	if Vector2(want.x - _cine_anchor.x, want.z - _cine_anchor.z).length() > 7.5 and not _capture_shot: _cine_cam.position = want
+	_cine_cam.look_at(_cine_look)
 
 ## Real-time capture for the fallback clip: frames are stamped with their true duration, so the
 ## video plays at the speed the scene actually ran, whatever the capture rate was.
@@ -1711,7 +1760,25 @@ func _stand_near(id: String, d: float) -> void:
 	game.cam_yaw = atan2(-dx, -dz)
 	game.cam_pitch = 0.12
 
+## Shots mode with --vice-fx: stand by a witness, ask the server for an incident (director only),
+## and photograph what the swarm does about it: popup, message arc, bulletin ring.
+func _run_fx_shots() -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	await get_tree().create_timer(2.0).timeout
+	_stand_near("npc_w1", 6.0)
+	await get_tree().create_timer(1.8).timeout          # let the server accept the new pose
+	_send({"type": "demo.incident", "incidentType": "SIGHTING", "commandId": _cid("ginc")}, "incident")
+	var tag := want_mode if want_mode != "" else "drex"
+	for step in [["a", 0.75], ["b", 0.45], ["c", 0.5], ["d", 0.6], ["e", 0.9], ["f", 1.5]]:
+		await get_tree().create_timer(step[1]).timeout
+		await _shot("fx_%s_%s" % [tag, step[0]])
+	print("VICE_SHOTS_OK fx feed=%s" % str(_feed))
+	get_tree().quit()
+
 func _run_shots() -> void:
+	if fx_shots:
+		_run_fx_shots()
+		return
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	await get_tree().create_timer(2.5).timeout
 	await _shot("01_spawn")

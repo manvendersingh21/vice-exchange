@@ -480,6 +480,13 @@ describe("FR-003: movement is server-integrated", () => {
     expect(tp.ok).toBe(false); expect(tp.error?.code).toBe("MOVE_REJECTED");
     expect(c.x).toBe(at.x);
     expect(t.cmd(a.id, { type: "player.pose", x: 500, z: 500 }).error?.code).toBe("MOVE_REJECTED");
+    // A browser client cannot report itself inside a building; an external 3D world (bridge) client can, its geometry is its own.
+    const b = t.join("Bo", "HUNTER"); const g = t.engine.addPlayer({ nickname: "Godot", role: "HUNTER", sessionToken: "tok_g", socketId: "bridge:1" });
+    t.place(b.id, 17, 6); t.place(g.id, 17, 6); t.run(1000); // just north of Precinct 9 (x 8..26, z 8..22)
+    const into = t.cmd(b.id, { type: "player.pose", x: 17, z: 15 });
+    expect(into.error).toMatchObject({ code: "MOVE_REJECTED", message: "Inside a building" });
+    expect(t.char(b.id)).toMatchObject({ x: 17, z: 6 });
+    expect(t.cmd(g.id, { type: "player.pose", x: 17, z: 15 }).ok).toBe(true);
     t.run(100);
     expect(t.cmd(a.id, { type: "player.pose", x: at.x - 2, z: at.z }).ok).toBe(true);
     expect(c.x).toBe(at.x - 2);

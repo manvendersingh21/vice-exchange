@@ -8,6 +8,10 @@ import { MarketPanel } from "./components/MarketPanel";
 import { AgentInspector } from "./components/AgentInspector";
 import { EventTimeline } from "./components/EventTimeline";
 import { DemoDirector } from "./components/DemoDirector";
+import TickerTape from "./components/wow/TickerTape";
+import DecisionSpotlight from "./components/wow/DecisionSpotlight";
+import CrashCinematic from "./components/wow/CrashCinematic";
+import SwarmGraph from "./components/wow/SwarmGraph";
 import { getPose, isLive, selectMyCharacter, useGame, useMyCharacter } from "./state/gameStore";
 import { leaveRoom, newId, send, sendNoAck } from "./net/socketClient";
 import { vd } from "./lib/format";
@@ -194,7 +198,7 @@ function Toasts() {
 
 export function App() {
   const session = useGame((s) => s.session);
-  const [tab, setTab] = useState<"timeline" | "director">("timeline");
+  const [tab, setTab] = useState<"timeline" | "swarm" | "director">("timeline");
   const [expanded, setExpanded] = useState(false);
   const running = useGame((s) => s.experiments.some((x) => x.status === "RUNNING"));
   useEffect(() => { if (running) { setTab("director"); setExpanded(true); } }, [running]);
@@ -203,11 +207,12 @@ export function App() {
   return (
     <div className="app">
       <Header />
-      <main className={`grid ${expanded ? "xl" : tab === "director" ? "tall" : ""}`}>
+      <TickerTape />
+      <main className={`grid ${expanded ? "xl" : tab !== "timeline" ? "tall" : ""}`}>
         <section className="city">
           <CityHost />
+          <DecisionSpotlight dock="top-right" />
           <Hud />
-          <CrashOverlay />
         </section>
         <aside className="side">
           <MarketPanel />
@@ -216,14 +221,16 @@ export function App() {
         <section className="bottom">
           <div className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "timeline"} className={tab === "timeline" ? "on" : ""} onClick={() => setTab("timeline")}>EVENT TIMELINE</button>
+            <button role="tab" aria-selected={tab === "swarm"} className={tab === "swarm" ? "on" : ""} onClick={() => setTab("swarm")}>SWARM GRAPH</button>
             <button role="tab" aria-selected={tab === "director"} className={tab === "director" ? "on" : ""} onClick={() => setTab("director")}>DEMO DIRECTOR · METRICS</button>
             <span className="notice">{CREDITS_NOTICE}</span>
             <button className="ghost small" aria-pressed={expanded} title="Make this panel taller or shorter" onClick={() => setExpanded((v) => !v)}>{expanded ? "▼ smaller" : "▲ larger"}</button>
           </div>
-          {tab === "timeline" ? <EventTimeline /> : <DemoDirector />}
+          {tab === "timeline" ? <EventTimeline /> : tab === "swarm" ? <div className="swarm-host"><SwarmGraph /></div> : <DemoDirector />}
         </section>
       </main>
       <Toasts />
+      <CrashCinematic />
     </div>
   );
 }

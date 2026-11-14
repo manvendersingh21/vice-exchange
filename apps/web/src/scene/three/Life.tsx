@@ -150,7 +150,10 @@ function Glints({ map }: { map: MapView }) {
           gl_Position = projectionMatrix * mv; }`,
       fragmentShader: `varying float vA; void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float d = dot(p, p); if (d > 1.0) discard;
         float star = (1.0 - d) * (1.0 - d) + 0.6 * max(0.0, 1.0 - 14.0 * abs(p.x * p.y));
-        gl_FragColor = vec4(vec3(4.0, 2.6, 1.5) * vA * star, vA * star); }`,
+        gl_FragColor = vec4(vec3(4.0, 2.6, 1.5) * vA * star, vA * star);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
     });
     return { geo: g, mat: m };
   }, [map]);

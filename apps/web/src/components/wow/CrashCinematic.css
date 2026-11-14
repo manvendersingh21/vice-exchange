@@ -16,8 +16,10 @@
   background:
     radial-gradient(62% 44% at 50% 27%, rgba(255, 52, 104, .34), rgba(255, 52, 104, 0) 72%),
     radial-gradient(80% 60% at 50% 104%, rgba(165, 107, 255, .2), rgba(165, 107, 255, 0) 70%),
-    radial-gradient(120% 100% at 50% 46%, rgba(60, 4, 24, .955) 0%, rgba(24, 3, 15, .975) 55%, rgba(6, 3, 10, .99) 100%);
+    radial-gradient(120% 100% at 50% 46%, rgba(60, 4, 24, .985) 0%, rgba(24, 3, 15, .99) 55%, rgba(6, 3, 10, .995) 100%);
 }
+/* red throb behind everything, driven by impact energy */
+.cc-pulse { position: absolute; inset: -8vmax; opacity: 0; will-change: opacity; background: radial-gradient(70% 62% at 50% 50%, rgba(255, 60, 96, .6), rgba(255, 60, 96, 0) 76%); }
 .cc-shake { position: absolute; inset: 0; transform-origin: 50% 50%; will-change: transform; }
 .cc-fx { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
@@ -65,14 +67,15 @@
 }
 .cc-ticker-fx.is-dead .cc-tk-s { color: var(--cc-bad); }
 
-/* ---- price readout ---- */
+/* ---- price readout: a pane of dark glass over the chart ---- */
 .cc-readout { position: absolute; left: 50%; top: 53%; transform: translate(-50%, -50%); }
 .cc-readout-fx {
   --cc-c: 0;
   position: relative; display: block; white-space: nowrap; text-align: center; line-height: 1; will-change: transform, opacity;
   font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-weight: 800; font-variant-numeric: tabular-nums;
-  font-size: min(10.5vw, 16vh); padding: .2em .26em .1em; min-width: calc(var(--cc-chars) * .62em + .7em);
-  background: linear-gradient(180deg, rgba(9, 2, 8, .9), rgba(26, 3, 13, .86));
+  font-size: min(10.5vw, 16vh); padding: .22em .26em .1em; min-width: calc(var(--cc-chars) * .62em + .7em);
+  background: linear-gradient(180deg, rgba(9, 2, 8, .76), rgba(26, 3, 13, .68));
+  -webkit-backdrop-filter: blur(.045em) saturate(1.25); backdrop-filter: blur(.045em) saturate(1.25);
   border: max(2px, .02em) solid rgba(255, 84, 104, .6); border-radius: .07em;
   box-shadow: 0 0 0 max(1px, .01em) rgba(0, 0, 0, .7), 0 0 1em rgba(255, 84, 104, .38), inset 0 0 .8em rgba(255, 84, 104, .2);
   text-shadow: calc(var(--cc-c) * 1em) 0 0 rgba(255, 79, 163, .9), calc(var(--cc-c) * -1em) 0 0 rgba(47, 243, 224, .9), 0 0 .3em rgba(255, 84, 104, .6);
@@ -81,17 +84,21 @@
   position: absolute; left: .7em; top: .55em; font-family: "Inter", ui-sans-serif, system-ui, sans-serif; font-size: .105em; font-weight: 800;
   letter-spacing: .3em; color: #ffb9c6; text-shadow: none;
 }
+.cc-readout-pct {
+  position: absolute; right: .55em; top: .34em; font-size: .14em; font-weight: 800; letter-spacing: .04em; color: #ff5468;
+  text-shadow: 0 0 .7em rgba(255, 84, 104, .85);
+}
 .cc-cell { display: inline-block; width: .62em; text-align: center; will-change: transform; }
 .cc-cell.pre { color: #ff9db0; }
 .cc-readout-fx.is-zero { color: #ff5468; border-color: #ff5468; box-shadow: 0 0 0 max(1px, .01em) rgba(0, 0, 0, .7), 0 0 1.6em rgba(255, 84, 104, .8), inset 0 0 1em rgba(255, 84, 104, .4); }
 .cc-readout-fx.is-zero .cc-cell { color: #ff5468; text-shadow: 0 0 .12em #fff, 0 0 .5em rgba(255, 84, 104, .95); }
 
 /* ---- caption row ---- */
-.cc-caption { position: absolute; left: 5%; right: 5%; top: 82%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 1.3vw; }
+.cc-caption { position: absolute; left: 5%; right: 5%; top: 81.3%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 1.3vw; }
 .cc-caption.has-captor { grid-template-columns: minmax(0, 1.7fr); }
 .cc-stat {
-  min-width: 0; padding: .35vh 0 .35vh 1vw; border-left: max(3px, .24vw) solid var(--cc-bad);
-  background: linear-gradient(90deg, rgba(255, 84, 104, .2), rgba(255, 84, 104, 0) 85%); will-change: transform, opacity;
+  min-width: 0; padding: .45vh .6vw .45vh 1vw; border-left: max(3px, .24vw) solid var(--cc-bad); will-change: transform, opacity;
+  background: linear-gradient(90deg, rgba(255, 84, 104, .22), rgba(255, 84, 104, 0) 85%), rgba(20, 3, 12, .92);
 }
 .cc-stat-k { font-size: clamp(14px, 1.06vw, 40px); font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: #ffb9c6; white-space: nowrap; }
 .cc-stat-v { font-size: clamp(26px, 2.55vw, 96px); font-weight: 900; line-height: 1.14; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; text-shadow: 0 0 .5em rgba(255, 84, 104, .45); }
@@ -110,20 +117,20 @@
   outline: min(.18vw, .32vh) solid var(--cc-bad); outline-offset: min(.5vw, .9vh);
   background:
     repeating-linear-gradient(-28deg, rgba(255, 84, 104, 0) 0 1.1vh, rgba(255, 84, 104, .06) 1.1vh 1.3vh),
-    linear-gradient(180deg, rgba(30, 3, 12, .94), rgba(16, 2, 8, .94));
+    linear-gradient(180deg, rgba(30, 3, 12, .95), rgba(16, 2, 8, .95));
   box-shadow: 0 0 6vw rgba(255, 84, 104, .5), 0 1.2vh 4vh rgba(0, 0, 0, .7), inset 0 0 3vw rgba(255, 84, 104, .22);
 }
-.cc-plate-top, .cc-plate-bot { font-size: clamp(14px, min(1.3vw, 2.3vh), 50px); font-weight: 800; letter-spacing: .44em; padding-left: .44em; color: #ff9bab; }
+.cc-plate-top, .cc-plate-bot { font-size: clamp(14px, min(1.3vw, 2.3vh), 50px); font-weight: 800; letter-spacing: .44em; padding-left: .44em; color: #ffa3b1; text-transform: uppercase; }
 .cc-plate-main {
-  font-size: min(8.4vw, 15vh); font-weight: 900; font-style: italic; line-height: 1.08; letter-spacing: .01em; color: #ff5468;
-  text-shadow: 0 0 .04em #ffd0d8, 0 0 .16em rgba(255, 84, 104, .95), 0 0 .6em rgba(255, 84, 104, .6);
+  font-size: min(8.4vw, 15vh); font-weight: 900; font-style: italic; line-height: 1.08; letter-spacing: .01em; color: #ff6679;
+  text-shadow: 0 0 .22em rgba(255, 84, 104, .75), 0 0 .7em rgba(255, 84, 104, .45);
 }
 .cc-plate-main em { font-style: normal; opacity: .75; padding: 0 .1em; }
 
 /* ---- footer, queue chip, overlays ---- */
 .cc-foot {
-  position: absolute; left: 5%; right: 5%; bottom: calc(var(--cc-tape) + .55vh); display: flex; justify-content: space-between; gap: 2vw;
-  font-size: clamp(12px, .86vw, 32px); letter-spacing: .08em; color: rgba(255, 214, 224, .72); white-space: nowrap;
+  position: absolute; left: 5%; right: 5%; bottom: calc(var(--cc-tape) + .3vh); display: flex; justify-content: space-between; gap: 2vw;
+  font-size: clamp(12px, .82vw, 30px); letter-spacing: .08em; color: rgba(255, 214, 224, .72); white-space: nowrap;
 }
 .cc-more {
   position: absolute; right: 5%; top: calc(var(--cc-tape) + 2.2vh); padding: .3em .8em; border: max(1px, .1em) solid var(--cc-warn); border-radius: 999px;

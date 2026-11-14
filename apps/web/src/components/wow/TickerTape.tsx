@@ -20,8 +20,8 @@ import type { TapeFx } from "./TickerTapeFx";
 import "./TickerTape.css";
 
 // ---------- constants ----------
-/** Scroll speed in strip-heights per second: 85 px/s on a 34 px strip, same reading pace at any scale. */
-const SPEED_PER_H = 2.5;
+/** Scroll speed in strip-heights per second: about 129 px/s on a 34 px strip, the same reading pace at any scale. */
+const SPEED_PER_H = 3.8;
 const LOOKAHEAD_PER_H = 0.9;
 const MAX_CELLS = 48;
 const FLASH_MS = 4400;
@@ -320,7 +320,7 @@ interface Engine {
   scroll: number; speed: number; hover: boolean; snapped: boolean;
   w: number; h: number;
   keys: number[]; lefts: number[]; rights: number[]; total: number;
-  pending: boolean; fx: TapeFx | null; pl: Playlist;
+  pending: boolean; syncFills: number; fx: TapeFx | null; pl: Playlist;
 }
 const newPlaylist = (): Playlist => ({ lastTicker: null, newsRun: 99, flip: false, statIdx: 0 });
 
@@ -331,7 +331,9 @@ function pickNext(e: Engine, feed: TapeFeed): Item {
   const pl = e.pl;
   const news = (n: NewsItem): Item => ({ kind: "news", h: n.h, fresh: n.fresh });
   if (feed.peekPriority() >= 3) { const n = feed.takeFresh(); if (n) { pl.newsRun++; return news(n); } }
-  const quota = (order.length <= 1 ? 2 : 1) + (feed.backlog() >= 3 ? 1 : 0);
+  // News cells allowed between two listings. A burst of events is told back to back so the tape keeps up.
+  const waiting = feed.backlog();
+  const quota = waiting >= 2 ? 4 : waiting === 1 ? 2 : order.length <= 1 ? 2 : 1;
   if (order.length > 0 && pl.newsRun >= quota) {
     pl.newsRun = 0;
     const at = pl.lastTicker ? order.indexOf(pl.lastTicker) : -1;
@@ -361,7 +363,7 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
   const conn = useGame((s) => s.conn);
   const engRef = useRef<Engine | null>(null);
   if (!engRef.current) {
-    engRef.current = { cells: [], nextKey: 1, scroll: 0, speed: 0, hover: false, snapped: false, w: 0, h: 34, keys: [], lefts: [], rights: [], total: 0, pending: false, fx: null, pl: newPlaylist() };
+    engRef.current = { cells: [], nextKey: 1, scroll: 0, speed: 0, hover: false, snapped: false, w: 0, h: 34, keys: [], lefts: [], rights: [], total: 0, pending: false, syncFills: 0, fx: null, pl: newPlaylist() };
   }
 
   // The engine lives in refs; these closures never go stale because they only touch refs and stable setters.
@@ -400,11 +402,9 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
       const gap = e.w + e.h * LOOKAHEAD_PER_H - (e.total - e.scroll);
       if (!drop && gap <= 0) return;
       const next = drop ? e.cells.slice(drop) : e.cells.slice();
-      if (gap > 0) {
-        // One cell at a time while scrolling (so breaking news can take the very next slot); several when empty.
-        const want = n === 0 || gap > e.h * 12 ? Math.min(8, Math.ceil(gap / (e.h * 9))) : 1;
-        for (let i = 0; i < want && next.length < MAX_CELLS; i++) next.push({ key: e.nextKey++, item: pickNext(e, feed) });
-      }
+      // Exactly one cell per commit: it is measured before the next one is chosen, so the belt never queues more
+      // than the cell that is entering and a fresh headline can take the very next slot.
+      if (gap > 0 && next.length < MAX_CELLS) next.push({ key: e.nextKey++, item: pickNext(e, feed) });
       if (!drop && next.length === n) return;
       e.cells = next; e.pending = true;
       setCells(next);
@@ -438,12 +438,13 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
     return () => { ro.disconnect(); e.fx?.clear(); e.fx = null; };
   }, [api]);
 
-  // After every commit of the belt: re-anchor, then top up before the browser paints.
+  // After every commit of the belt: re-anchor, then top up before the browser paints. The first fill is a short
+  // chain of synchronous commits (one per cell); the frame loop takes over if it ever gets long.
   useLayoutEffect(() => {
     const e = api.eng();
     api.measure();
     e.pending = false;
-    api.maintain();
+    if (e.syncFills++ < 28) api.maintain();
   }, [cells, api]);
 
   // The one animation frame loop: constant-speed scroll, eased pause on hover, light effects.
@@ -454,6 +455,7 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
       const dt = Math.min(50, Math.max(0, now - last));
       last = now;
       const e = api.eng();
+      e.syncFills = 0;
       if (e.w > 0) {
         const target = e.hover ? 0 : SPEED_PER_H * e.h;
         e.speed += (target - e.speed) * (1 - Math.exp(-dt / (e.hover ? 120 : 280)));
@@ -485,7 +487,7 @@ function LiveTape({ feed }: { feed: TapeFeed }): ReactElement {
         }
         break;
       }
-      case "headline": fx?.burst(e.w - e.h * 1.2, TONE_COLOR[sig.headline.tone] ?? "#2ff3e0", sig.headline.priority >= 2 ? 12 : 5); break;
+      case "headline": if (sig.headline.priority >= 2) fx?.edge(TONE_COLOR[sig.headline.tone] ?? "#2ff3e0"); break;
       case "alert": setAlert(sig.headline); setSpoken(sig.headline.text); break;
       case "capture": {
         setFlash({ seq: sig.seq, ticker: sig.ticker, from: sig.from, captorName: sig.captorName });

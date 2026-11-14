@@ -354,6 +354,9 @@ export class RoomEngine implements WorldPort {
         const dt = Math.max(0.05, (now - (this.poseAt.get(c.id) ?? c.spawnTimeMs)) / 1000);
         if (cmd.x < w.x0 || cmd.x > w.x1 || cmd.z < w.z0 || cmd.z > w.z1) return fail(id, "MOVE_REJECTED", "Outside the map");
         if (dist(c, cmd) / dt > RULES.maxPoseSpeed) return fail(id, "MOVE_REJECTED", "Too fast");
+        // Browser clients share the server's map, so a reported pose may not be inside a building.
+        // External 3D worlds (bridge clients) own their geometry and are only bounds- and speed-checked.
+        if (!player.socketId?.startsWith("bridge:") && this.blocked(cmd.x, cmd.z)) return fail(id, "MOVE_REJECTED", "Inside a building");
         this.poseAt.set(c.id, now); c.x = cmd.x; c.z = cmd.z; player.moveDir = { x: 0, z: 0 };
         return ack(id);
       }

@@ -97,6 +97,16 @@ describe("scheduler", () => {
     expect(t).toMatchObject({ decisionSource: "drex", chosenAction: "report", providerChoice: "report", confidence: 0.22 });
   });
 
+  it("never lets a credential echoed in a provider error reach the trace", async () => {
+    const leaky = new ProviderError("auth", "Invalid API key nace_sk_ABCdef123456789_xyz for Bearer LLM|2700000000000000|SeCrEt_value-1", { status: 401 });
+    const t = await run(make(fake("drex", async () => { throw leaky; })), req());
+    expect(t.decisionSource).toBe("fallback");
+    expect(t.errorMessage).not.toMatch(/nace_sk_ABC|SeCrEt_value|2700000000000000/);
+    expect(t.errorMessage).toContain("[redacted");
+    expect(t.confidence).toBeNull();
+    expect(t.probabilities).toBeNull();
+  });
+
   it("caps concurrency under a burst and drains the queue", async () => {
     let inFlight = 0, peak = 0;
     const d = fake("drex", async () => { inFlight += 1; peak = Math.max(peak, inFlight); await new Promise((r) => setTimeout(r, 50)); inFlight -= 1; return ok(); });

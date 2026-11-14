@@ -73,7 +73,11 @@ function centres(spans: Array<[number, number]>, max: number): number[] {
   return out;
 }
 
-export function createTraffic(map: MapView, seed: number, wantedCars: number): Traffic {
+/**
+ * `keepClear` is optional static geometry (for example fixed stall positions): a lane passing within 1.9 m of
+ * one of those spots is closed to traffic. It is evaluated once, here, and never again.
+ */
+export function createTraffic(map: MapView, seed: number, wantedCars: number, keepClear: ReadonlyArray<{ x: number; z: number }> = []): Traffic {
   const land = map.water.length ? Math.min(...map.water.map((r) => r.z0)) : map.height;
   const blocks = map.buildings.filter((b) => b.x1 - b.x0 > 6);
   let xs = centres(blocks.map((b) => [b.x0, b.x1] as [number, number]), map.width);
@@ -132,11 +136,13 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number): T
   const lampX = new Float32Array(maxLinks), lampZ = new Float32Array(maxLinks);
   let linkCount = 0;
   const stop: number[] = [], walks: number[] = [];
+  // 1. every candidate lane between neighbouring junctions
+  interface Lane { n: number; n2: number; d: number; i: number; j: number; x0: number; z0: number; x1: number; z1: number; span: number; kerb: number; off: number; alive: boolean }
+  const lanes: Lane[] = [];
   for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
     const n = j * nx + i;
     nodeX[n] = xs[i]!; nodeZ[n] = zs[j]!;
     nodeOffset[n] = Math.floor(rand() * CYCLE * 4) / 4;
-    let arms = 0;
     for (let d = 0; d < 4; d++) {
       const i2 = i + DIR_X[d]!, j2 = j + DIR_Z[d]!;
       if (i2 < 0 || i2 >= nx || j2 < 0 || j2 >= nz) continue;
@@ -145,28 +151,52 @@ export function createTraffic(map: MapView, seed: number, wantedCars: number): T
       const hA = horiz ? hx[i]! : hz[j]!, hB = horiz ? hx[i2]! : hz[j2]!;
       const span = Math.abs(horiz ? xs[i2]! - xs[i]! : zs[j2]! - zs[j]!) - hA - hB;
       if (span < 3) continue;
-      arms++;
-      const L = linkCount++;
       const dx = DIR_X[d]!, dz = DIR_Z[d]!, rx = -dz, rz = dx;   // right-hand side of travel
-      lx0[L] = xs[i]! + dx * hA + rx * off; lz0[L] = zs[j]! + dz * hA + rz * off;
-      linkX1[L] = xs[i2]! - dx * hB + rx * off; linkZ1[L] = zs[j2]! - dz * hB + rz * off;
-      llen[L] = span; linkDir[L] = d; linkNode[L] = j2 * nx + i2;
-      outLink[n * 4 + d] = L;
-      // kerb on the right of this lane
+      const x0 = xs[i]! + dx * hA + rx * off, z0 = zs[j]! + dz * hA + rz * off;
+      const x1 = xs[i2]! - dx * hB + rx * off, z1 = zs[j2]! - dz * hB + rz * off;
+      // a lane that would run over a keep-clear spot carries no traffic at all
+      let alive = true;
+      for (const p of keepClear) {
+        const u = Math.max(0, Math.min(1, ((p.x - x0) * (x1 - x0) + (p.z - z0) * (z1 - z0)) / (span * span)));
+        if (Math.hypot(p.x - (x0 + (x1 - x0) * u), p.z - (z0 + (z1 - z0) * u)) < 1.9) alive = false;
+      }
       const side = horiz ? (rz > 0 ? zPos[j]! : zNeg[j]!) : (rx > 0 ? xPos[i]! : xNeg[i]!);
-      const kerb = side - off;
-      stop.push(linkX1[L]! - rx * (off - 0.2), linkZ1[L]! - rz * (off - 0.2), linkX1[L]! + rx * (kerb - 0.2), linkZ1[L]! + rz * (kerb - 0.2));
-      lampX[L] = Math.max(0.7, Math.min(map.width - 0.7, linkX1[L]! + rx * (kerb + 0.5)));
-      lampZ[L] = Math.max(0.7, Math.min(land - 0.7, linkZ1[L]! + rz * (kerb + 0.5)));
-      // zebra crossing on this arm, just outside the junction (drawn once per arm, from the outgoing lane)
-      const at = (horiz ? hx[i]! : hz[j]!) - BOX + 0.6;
-      const cx = xs[i]! + dx * at, cz = zs[j]! + dz * at;
-      const lo = horiz ? zNeg[j]! : xNeg[i]!, hi = horiz ? zPos[j]! : xPos[i]!;
-      if (horiz) walks.push(cx, cz - lo + 0.25, cx, cz + hi - 0.25); else walks.push(cx - lo + 0.25, cz, cx + hi - 0.25, cz);
+      lanes.push({ n, n2: j2 * nx + i2, d, i, j, x0, z0, x1, z1, span, kerb: side - off, off, alive });
     }
-    nodeSignal[n] = arms >= 3 ? 1 : 0;
   }
-  const armsOf = (n: number): number => { let c = 0; for (let d = 0; d < 4; d++) if (outLink[n * 4 + d]! >= 0) c++; return c; };
+  // 2. drop lanes that lead nowhere but straight back, until nothing changes
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const c of lanes) {
+      if (!c.alive) continue;
+      if (!lanes.some((o) => o.alive && o.n === c.n2 && o.d !== (c.d + 2) % 4)) { c.alive = false; changed = true; }
+    }
+  }
+  // 3. the surviving lanes, their paint and their signal lamps
+  const armCount = new Uint8Array(nodeCount);
+  for (let n = 0; n < nodeCount; n++) for (let d = 0; d < 4; d++) {
+    if (!lanes.some((c) => c.alive && ((c.n === n && c.d === d) || (c.n2 === n && (c.d + 2) % 4 === d)))) continue;
+    armCount[n] = armCount[n]! + 1;
+    // zebra crossing on this arm, just outside the junction
+    const i = n % nx, j = Math.floor(n / nx), horiz = d % 2 === 0;
+    const at = (horiz ? hx[i]! : hz[j]!) - BOX + 0.6;
+    const cx = xs[i]! + DIR_X[d]! * at, cz = zs[j]! + DIR_Z[d]! * at;
+    const lo = horiz ? zNeg[j]! : xNeg[i]!, hi = horiz ? zPos[j]! : xPos[i]!;
+    if (horiz) walks.push(cx, cz - lo + 0.25, cx, cz + hi - 0.25); else walks.push(cx - lo + 0.25, cz, cx + hi - 0.25, cz);
+  }
+  for (const c of lanes) {
+    if (!c.alive) continue;
+    const L = linkCount++;
+    const rx = -DIR_Z[c.d]!, rz = DIR_X[c.d]!;
+    lx0[L] = c.x0; lz0[L] = c.z0; linkX1[L] = c.x1; linkZ1[L] = c.z1;
+    llen[L] = c.span; linkDir[L] = c.d; linkNode[L] = c.n2;
+    outLink[c.n * 4 + c.d] = L;
+    stop.push(c.x1 - rx * (c.off - 0.2), c.z1 - rz * (c.off - 0.2), c.x1 + rx * (c.kerb - 0.2), c.z1 + rz * (c.kerb - 0.2));
+    lampX[L] = Math.max(0.7, Math.min(map.width - 0.7, c.x1 + rx * (c.kerb + 0.5)));
+    lampZ[L] = Math.max(0.7, Math.min(land - 0.7, c.z1 + rz * (c.kerb + 0.5)));
+  }
+  for (let n = 0; n < nodeCount; n++) nodeSignal[n] = armCount[n]! >= 3 ? 1 : 0;
+  const armsOf = (n: number): number => armCount[n]!;
 
   // ---- junction movements: straight and right always; left only where it cannot meet a head-on left ----
   const succ = new Int16Array(maxLinks * 3).fill(-1);

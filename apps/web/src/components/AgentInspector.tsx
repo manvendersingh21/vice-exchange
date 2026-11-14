@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { AgentView, DecisionTrace, GameEvent, MemoryEntry } from "@vice/contracts";
 import { nameOf, useGame, useSelectedAgent } from "../state/gameStore";
 import { ms, sourceLabel, traceHasProviderData, vd } from "../lib/format";
+import SwarmGraph from "./wow/SwarmGraph";
 
 const ROLE_ICON: Record<string, string> = { WITNESS: "👁", INFORMANT: "🗣", TRADER: "📈", POLICE: "🛡" };
 const PROV: Record<string, string> = { DIRECT: "saw it first-hand", MESSAGE: "was told", BULLETIN: "public bulletin", DOCUMENT: "policy document (NDI)" };
@@ -121,7 +122,7 @@ export function AgentInspector() {
           );
         })}
       </div>
-      {agent ? <AgentDetail a={agent} /> : <div className="dim pad">Select an NPC to see what it knows, what it was offered, what it chose, and who actually decided.</div>}
+      {agent ? <AgentDetail a={agent} /> : <div className="swarm-idle"><SwarmGraph /></div>}
     </section>
   );
 }

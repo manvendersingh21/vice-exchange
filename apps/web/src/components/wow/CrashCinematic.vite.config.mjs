@@ -6,7 +6,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig } from "vite";
-import base from "../../../vite.config";
+import base from "../../../vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const web = path.resolve(here, "../../..");

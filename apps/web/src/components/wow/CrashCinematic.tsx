@@ -131,6 +131,8 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
   const shakeRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const flashRef = useRef<HTMLDivElement>(null);
+  const pulseRef = useRef<HTMLDivElement>(null);
+  const pctRef = useRef<HTMLSpanElement>(null);
   const runTopRef = useRef<HTMLDivElement>(null);
   const runBotRef = useRef<HTMLDivElement>(null);
   const kickerRef = useRef<HTMLDivElement>(null);
@@ -162,6 +164,8 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
     const readoutFx = readoutFxRef.current, caption = captionRef.current, plateSlot = plateSlotRef.current, plate = plateRef.current;
     if (!root || !shake || !canvas || !flash || !runTop || !runBot || !kicker || !tickerSlot || !tickerFx || !ghostA || !ghostP || !readoutFx || !caption || !plateSlot || !plate) return;
     const slices = [slice1Ref.current, slice2Ref.current];
+    const pulse = pulseRef.current, pct = pctRef.current;
+    let shownPct = "";
     const statEls = Array.from(caption.children) as HTMLElement[];
     const ctx = canvas.getContext("2d");
     const seed = hashString(shot.ticker) | 0;
@@ -205,6 +209,7 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
       flash.style.opacity = fl.alpha.toFixed(3);
       if (fl.alpha > 0) flash.style.backgroundColor = `rgb(${fl.rgb})`;
       if (ctx) { ctx.setTransform(pixel, 0, 0, pixel, 0, 0); drawFx(ctx, m, t, calm); }
+      if (pulse) pulse.style.opacity = Math.min(0.8, energy * 0.024).toFixed(3); // the room throbs with every lurch
 
       // hazard tape
       const shift = calm ? 0 : (t * 0.34 * m.scale) % unitW;
@@ -251,6 +256,12 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
         }
         if (shown[i] !== ch) { shown[i] = ch; el.textContent = ch; el.style.display = ch ? "" : "none"; }
         el.style.transform = ty ? `translate3d(0,${ty.toFixed(3)}em,0)` : "";
+      }
+      if (pct) {
+        // Derived from the number on screen: it reads -100% only once the price reads exactly V$0.
+        const drop = m.last > 0 ? (1 - price / m.last) * 100 : 100;
+        const label = t <= TL.fall0 ? "" : zeroed ? "▼ −100%" : `▼ −${Math.min(99.9, drop).toFixed(1)}%`;
+        if (label !== shownPct) { shownPct = label; pct.textContent = label; }
       }
       const heat = clamp01((t - TL.fall0) / (TL.zero - TL.fall0));
       readoutFx.classList.toggle("is-zero", zeroed);
@@ -321,6 +332,7 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
   return (
     <div ref={rootRef} className={`cc-root${calm ? " cc-calm" : ""}`} style={style} role="alert" aria-live="assertive" onClick={() => dismissRef.current()}>
       <div className="cc-bg" aria-hidden />
+      <div ref={pulseRef} className="cc-pulse" aria-hidden />
       <div ref={shakeRef} className="cc-shake" aria-hidden>
         <canvas ref={canvasRef} className="cc-fx" />
         <div className="cc-tape top"><div ref={runTopRef} className="cc-tape-run">{tapeUnit}{tapeUnit}{tapeUnit}{tapeUnit}{tapeUnit}{tapeUnit}</div></div>
@@ -337,6 +349,7 @@ function CrashStage({ shot, calm, waiting, freezeAtMs, onDone }: StageProps): Re
         <div className="cc-readout">
           <div ref={readoutFxRef} className="cc-readout-fx">
             <span className="cc-readout-k">SPOT PRICE</span>
+            <span ref={pctRef} className="cc-readout-pct" />
             {Array.from({ length: maxChars }, (_, i) => (
               <span key={i} ref={(el) => { cellRefs.current[i] = el; }} className={`cc-cell${i < 2 ? " pre" : ""}`} />
             ))}
