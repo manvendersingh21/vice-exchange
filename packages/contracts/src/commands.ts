@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-const shortId = z.string().min(1).max(64);
+/**
+ * Server-issued ids look like chr_0001 or mis_0003: a lowercase prefix, an underscore, then letters or digits.
+ * The pattern also keeps inherited object keys such as __proto__, constructor or toString out of every lookup.
+ */
+const shortId = z.string().regex(/^[a-z]{2,8}_[A-Za-z0-9_-]{1,48}$/);
+/** Tickers look like ACE-01: three to five capitals or digits, a dash, a counter. */
+export const tickerSchema = z.string().regex(/^[A-Z0-9]{3,5}-[0-9]{2,5}$/);
 /** Idempotency key: required on every command that mutates money, capture, missions or life state. */
 const commandId = z.string().min(8).max(64);
 const requestId = z.string().min(1).max(64);
@@ -19,8 +25,8 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   /** External-world clients (the Godot city) report a pose; the server validates speed and bounds and may reject it. */
   z.object({ type: z.literal("player.pose"), x: z.number().finite(), z: z.number().finite(), requestId: requestId.optional() }),
   z.object({ type: z.literal("mission.interact"), missionId: shortId, commandId }),
-  z.object({ type: z.literal("market.buy"), ticker: shortId, qty: z.literal(1), commandId }),
-  z.object({ type: z.literal("market.sell"), ticker: shortId, qty: z.literal(1), commandId }),
+  z.object({ type: z.literal("market.buy"), ticker: tickerSchema, qty: z.literal(1), commandId }),
+  z.object({ type: z.literal("market.sell"), ticker: tickerSchema, qty: z.literal(1), commandId }),
   z.object({ type: z.literal("capture.attempt"), targetCharacterId: shortId, commandId }),
   z.object({ type: z.literal("character.respawn"), commandId }),
   z.object({ type: z.literal("demo.reset"), commandId, seed: z.number().int().min(0).max(2147483647).optional() }),
