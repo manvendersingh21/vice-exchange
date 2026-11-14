@@ -94,15 +94,16 @@ export class FugitiveAgent {
     const ammo = view.ammo ?? 0;
     const inRange = seen.filter((p) => p.d <= RULES.weapon.rangeM);
     const options: Record<string, string> = {
-      lay_low: "Walk to a quiet spot away from the last pursuer and wait: heat cools if nobody is on my case, and every second I survive adds to my value",
+      lay_low: "Hide and wait. Right when I am wanted or a pursuer was just near, because heat cools while I stay out of sight. Wrong when nobody is after me and a job is open, because waiting earns little",
     };
-    if (mission) options.do_job = "Go to the open job and take it: more notoriety and a higher price, but more heat and a bigger bounty on me";
-    if (seen.length) options.flee = "Run from the nearest pursuer I can see before they get close enough to capture me";
-    if (inRange.length && ammo > 0) options.fire = "Stun the nearest pursuer in range to break away: it works for three seconds, costs a charge and adds heat";
+    if (mission) options.do_job = "Go and take the open job. Right when I am not wanted and no pursuer is in sight: a job raises my price far more than waiting does. Wrong when police or hunters are close";
+    if (seen.length) options.flee = "Run from the nearest pursuer I can see. Right when one is closing in and I cannot or should not stun them";
+    if (inRange.length && ammo > 0) options.fire = "Stun the nearest pursuer in range, then run. Right when they are about to reach me: it stops them for three seconds, costs one charge and adds heat";
     const wanted = c.status === "WANTED";
     const state = {
       role: "fugitive", name: NAME,
-      goal: "Stay free as long as possible: my value and the bounty on me grow while I survive, and capture ends me at zero.",
+      goal: "Make my own ticker as valuable as I can and never get captured. Jobs raise my price the most, surviving adds a little every few seconds, and capture ends me at zero.",
+      situation: wanted ? "I am WANTED: police and hunters may capture me." : seen.length ? "Not wanted, but a pursuer is in sight." : "Not wanted and nobody is after me right now.",
       heat: Math.round(c.heat), wanted, wanted_level: wantedLevel(c.heat),
       my_ticker: c.ticker, my_price: c.ticker ? e.marketSummary(c.ticker)?.spotPrice ?? null : null, bounty_on_me: e.deps.economy.bountyFor(s, c.id, now),
       seconds_survived: Math.round((now - c.spawnTimeMs) / 1000), jobs_done: c.completedMissions, stun_charges: ammo,
