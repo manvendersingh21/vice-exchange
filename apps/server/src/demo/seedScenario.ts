@@ -11,8 +11,12 @@ export const NPC_SEEDS: readonly NpcSeed[] = [
   { id: "npc_i2", name: "Dex Marlowe", role: "INFORMANT", at: { x: 62, z: 30 }, persona: "Cautious, relays only what he believes.", goal: "Protect his reputation for accurate tips.", contacts: ["npc_t2"] },
   { id: "npc_t1", name: "Priya Castellan", role: "TRADER", at: { x: 17, z: 31 }, persona: "Momentum trader, risk-seeking.", goal: "Grow her fictional V$ portfolio by riding notoriety.", contacts: [] },
   { id: "npc_t2", name: "Rook Halvorsen", role: "TRADER", at: { x: 30, z: 41 }, persona: "Risk-averse, sells on bad news.", goal: "Protect capital; avoid holding a ticker that could go to zero.", contacts: [] },
-  { id: "npc_p1", name: "Sgt. Imani Duarte", role: "POLICE", at: { x: 32, z: 28 }, patrol: [{ x: 32, z: 28 }, { x: 62, z: 28 }, { x: 62, z: 54 }, { x: 32, z: 54 }], persona: "By the book.", goal: "Capture wanted characters with solid evidence.", contacts: [] },
-  { id: "npc_p2", name: "Ofc. Cole Renner", role: "POLICE", at: { x: 92, z: 28 }, patrol: [{ x: 92, z: 28 }, { x: 92, z: 54 }, { x: 62, z: 54 }, { x: 62, z: 28 }], persona: "Aggressive.", goal: "Make the arrest before anyone else does.", contacts: [] },
+  { id: "npc_p1", name: "Sgt. Imani Duarte", role: "POLICE", at: { x: 32, z: 28 },
+    // Stays north of the marina (never within 14 m of the dock job), so police learn about that job through the witness, not by walking past it.
+    patrol: [{ x: 32, z: 28 }, { x: 62, z: 28 }, { x: 62, z: 44 }, { x: 62, z: 28 }, { x: 32, z: 28 }, { x: 32, z: 44 }], persona: "By the book.", goal: "Capture wanted characters with solid evidence.", contacts: [] },
+  { id: "npc_p2", name: "Ofc. Cole Renner", role: "POLICE", at: { x: 92, z: 28 },
+    // Also keeps north of the marina, so the first job's pacing never depends on where he happens to be.
+    patrol: [{ x: 92, z: 28 }, { x: 92, z: 44 }, { x: 92, z: 28 }, { x: 77, z: 28 }], persona: "Aggressive.", goal: "Make the arrest before anyone else does.", contacts: [] },
 ];
 
 export function seedNpcs(): Record<string, NpcState> {

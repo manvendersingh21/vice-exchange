@@ -1,19 +1,27 @@
 import { Component, type ReactNode } from "react";
 
-/** True when the browser can create a WebGL context. Cheap; safe to call before loading three.js. */
+let cached: boolean | null = null;
+/**
+ * True when the browser can create a WebGL context. Probed ONCE and the probe context is released immediately:
+ * browsers cap live WebGL contexts (~16) and evict the oldest, so probing per render would kill the real scene.
+ */
 export function webglAvailable(): boolean {
+  if (cached !== null) return cached;
   try {
     const c = document.createElement("canvas");
-    return !!(c.getContext("webgl2") || c.getContext("webgl"));
+    const gl = (c.getContext("webgl2") ?? c.getContext("webgl")) as WebGLRenderingContext | null;
+    cached = gl !== null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
   } catch {
-    return false;
+    cached = false;
   }
+  return cached;
 }
 
 interface Props { fallback: ReactNode; onError?: (error: unknown) => void; children: ReactNode }
 interface State { failed: boolean }
 
-/** Wrap the lazy 3D view with this: any render/load error or missing WebGL shows `fallback` (the 2D city) instead. */
+/** Optional wrapper for the lazy 3D view: any render/load error or missing WebGL shows `fallback` (the 2D city) instead. */
 export class SceneBoundary extends Component<Props, State> {
   state: State = { failed: !webglAvailable() };
   static getDerivedStateFromError(): State { return { failed: true }; }

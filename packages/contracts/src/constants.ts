@@ -13,6 +13,11 @@ export const RULES = {
   maxPoseSpeed: 45,            // m/s ceiling accepted from player.pose clients (vehicles); above = rejected
   npcWalkSpeed: 3,
   policePursuitSpeed: 7.5,     // slower than a player on foot so escape is possible
+  // Demo pacing: an officer who decides to investigate a second-hand report sets off after a dispatch delay and
+  // searches at a slower pace, so the rumor chain and the market have time to react before any capture.
+  // A direct sighting is never delayed.
+  policeDispatchDelayMs: 10000,
+  policeSearchPaceFactor: 0.5,  // x npcWalkSpeed while investigating
   perceptionRadius: 14,        // metres, needs line of sight
   missionInteractRadius: 2.5,
   captureRadius: 2.5,

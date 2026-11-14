@@ -64,7 +64,15 @@ export function attachTransport(io: Server, rooms: RoomManager): { flush(room: R
       try {
         if (cmd.type === "room.create" || cmd.type === "room.join") {
           const old = sessions.get(socket.id);
-          if (old) { rooms.get(old.roomCode)?.engine.disconnect(old.playerId); void socket.leave(old.roomCode); }
+          const oldRoom = old && rooms.get(old.roomCode);
+          // Re-sending room.join with our own token is a resync, not a leave + join.
+          const resync = !!old && cmd.type === "room.join" && old.roomCode === cmd.roomCode && !!cmd.sessionToken
+            && oldRoom?.engine.state.players[old.playerId]?.sessionToken === cmd.sessionToken;
+          if (old && !resync) {
+            if (oldRoom?.engine.state.players[old.playerId]?.socketId === socket.id) oldRoom.engine.disconnect(old.playerId);
+            void socket.leave(old.roomCode); sessions.delete(socket.id);
+            if (oldRoom) flush(oldRoom);
+          }
           const r = rooms.join(cmd, socket.id);
           if (r.ok && r.room && r.playerId) {
             wire(r.room);

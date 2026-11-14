@@ -22,12 +22,18 @@ export interface AppOptions {
   webOrigin?: string;
   /** Mount the plain-WebSocket world bridge (external 3D clients) at /bridge. Default true. */
   bridge?: boolean;
-  policy?: PolicyPort | null;
+  /**
+   * Document-grounded police policy (NDI). Optional extras: `status` is its detailed report for /api/policy,
+   * `xraySvg` a picture of the source document with the cited regions (null until real facts are loaded).
+   */
+  policy?: (PolicyPort & { status?: () => unknown; xraySvg?: () => string | null }) | null;
   persistence?: PersistencePort;
 }
 export interface App {
   httpServer: HttpServer; io: SocketIOServer; rooms: RoomManager; persistence: PersistencePort; runner: ExperimentRunner;
   listen(): Promise<number>; close(): Promise<void>;
+  /** Call when policy ingestion has finished: every live room records POLICY_INGESTED once and refreshes its snapshot. */
+  announcePolicy(): void;
 }
 
 const PRIVATE_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[a-z0-9-]+\.local)$/i;
@@ -77,6 +83,8 @@ export function createApp(o: AppOptions): App {
     res.json({
       ok: true, drexConfigured: o.providers.naceApiKey.length > 0, metaConfigured: o.providers.metaApiKey.length > 0,
       rooms: rooms.rooms.size, defaultRoom: DEFAULT_ROOM_CODE, mode: r?.engine.state.mode ?? null, badge: r?.scheduler.status().badge ?? null,
+      shadowMeta: !!o.providers.shadowMeta && o.providers.naceApiKey.length > 0 && o.providers.metaApiKey.length > 0,
+      policyLoaded: !!o.policy?.view(),
       bridgeClients: bridge?.clients() ?? 0, credits: CREDITS_NOTICE,
     });
   });
@@ -105,9 +113,25 @@ export function createApp(o: AppOptions): App {
     return res.json({ ok: v.ok, source, runId: s.runId, eventCount: events.length, mismatches: v.mismatches, projection: v.projection });
   });
   app.get("/api/experiments", (_req, res) => res.json(exp.list()));
+  /** Where the police policy came from: document, NDI job ids, extracted facts with page and quote. */
+  app.get("/api/policy", (_req, res) => res.json(o.policy?.status?.() ?? { view: o.policy?.view() ?? null }));
+  /**
+   * Animated picture of the policy document as NDI parsed it. 404 until real NDI facts are loaded.
+   * It contains text taken from an external document, so it is served as an inert image: no script, no network, sandboxed.
+   */
+  app.get("/api/policy/xray.svg", (_req, res) => {
+    const svg = o.policy?.xraySvg?.() ?? null;
+    if (!svg) return res.status(404).json({ error: "POLICY_NOT_LOADED" });
+    return res.type("image/svg+xml").set({
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    }).send(svg);
+  });
 
   return {
     httpServer, io, rooms, persistence, runner: exp,
+    announcePolicy: () => { for (const r of rooms.rooms.values()) { r.engine.announcePolicy(); transport.flush(r); } },
     listen: () => new Promise<number>((resolve, reject) => {
       httpServer.once("error", reject);
       httpServer.listen(o.port, "0.0.0.0", () => resolve((httpServer.address() as AddressInfo).port));

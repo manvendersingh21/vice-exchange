@@ -167,6 +167,11 @@ export interface MetricsView {
   priceUpdates: number; captures: number;
   /** sender -> recipient communication edges (collaboration / competition graph). */
   edges: Array<{ from: EntityId; to: EntityId; kind: MessageKind; count: number }>;
+  /**
+   * Live side-by-side: for Drex decisions that were also sent to the Meta LLM in the background (never applied).
+   * Measured values only; null when no shadow comparison has completed.
+   */
+  shadow?: { compared: number; agreed: number; drexP50Ms: number | null; metaP50Ms: number | null } | null;
 }
 
 export interface ExperimentRow {

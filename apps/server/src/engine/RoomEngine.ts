@@ -10,6 +10,7 @@ import type {
   BrainsPort, CharacterState, Clock, EconomyPort, EmitOpts, MemoryPort, MessageRecord, MetricsPort, NpcState, OrderResult,
   PersistencePort, PlayerState, PolicyPort, PriceChange, RoomState, SchedulerPort, WorldPort,
 } from "../domain";
+import { freshSighting } from "../agents";
 import { seedNpcs } from "../demo/seedScenario";
 import { findPath } from "./pathfinding";
 import { pad } from "./util";
@@ -28,6 +29,7 @@ export interface Dirty { agents: Set<string>; listings: Set<string>; characters:
 const BULLETIN_FRESH_MS = 20000;
 const PURSUIT_LOST_MS = 5000;
 const INVESTIGATE_LINGER_MS = 4000;
+const INVESTIGATE_GIVE_UP_MS = 120000;
 const RADIUS = 0.6;
 /** The full log lives in the store; memory keeps the recent tail for snapshots, replay checks and experiments. */
 const MAX_EVENTS_IN_MEMORY = 20000;
@@ -54,9 +56,11 @@ export class RoomEngine implements WorldPort {
   private bulletinAt = new Map<string, number>();
   private captureAttemptAt = new Map<string, number>();
   private poseAt = new Map<string, number>();
-  private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null }>();
+  /** Per-officer chase/search record. `departAtMs` is when an investigation actually sets off (dispatch delay); `pace` is its walking speed. */
+  private pursuit = new Map<string, { lastSeenAtMs: number; lastKnown: Vec2; arrivedAtMs: number | null; departAtMs: number; pace: number }>();
   private storyOf = new Map<string, string>();
   private nav = new Map<string, { goal: Vec2; path: Vec2[]; at: number }>();
+  private policyAnnounced = false;
 
   constructor(readonly deps: EngineDeps, readonly opts: EngineOpts) {
     this.initState(opts.seed, opts.mode, 0);
@@ -124,16 +128,28 @@ export class RoomEngine implements WorldPort {
     return this.settleOrder({ walletId: npc.walletId, actorId: npcId, actorName: npc.name, actorKind: "NPC", ticker, side, commandId: this.nextId("ncmd") }, opts);
   }
   setNpcActivity(npcId: EntityId, activity: NpcActivity, target: { moveTarget?: Vec2 | null; targetCharacterId?: EntityId | null }): void {
+    this.setActivity(npcId, activity, target, false);
+  }
+  /** `immediate` is for the engine's own hand-over from a lost chase, which never waits for dispatch. */
+  private setActivity(npcId: EntityId, activity: NpcActivity, target: { moveTarget?: Vec2 | null; targetCharacterId?: EntityId | null }, immediate: boolean): void {
     const npc = this.state.npcs[npcId];
     if (!npc) return;
+    const now = this.now();
+    const prev = npc.activity === "INVESTIGATE" && npc.targetCharacterId === (target.targetCharacterId ?? null) ? this.pursuit.get(npcId) : undefined;
     npc.activity = activity;
     npc.moveTarget = target.moveTarget ?? null;
     npc.targetCharacterId = target.targetCharacterId ?? null;
     if (activity === "PURSUE" && npc.targetCharacterId) {
-      const c = this.state.characters[npc.targetCharacterId];
-      this.pursuit.set(npcId, { lastSeenAtMs: this.now(), lastKnown: npc.moveTarget ?? (c ? { x: c.x, z: c.z } : { x: npc.x, z: npc.z }), arrivedAtMs: null });
+      // Start from where this officer itself last saw (or was told about) the target; live sight then takes over each tick.
+      const known = this.deps.memory.recall(npcId, this.now()).find((m) => m.subjectCharacterId === npc.targetCharacterId && Number.isFinite(Number(m.payload.x)) && Number.isFinite(Number(m.payload.z)));
+      const from = known ? { x: Number(known.payload.x), z: Number(known.payload.z) } : { x: npc.x, z: npc.z };
+      this.pursuit.set(npcId, { lastSeenAtMs: now, lastKnown: npc.moveTarget ?? from, arrivedAtMs: null, departAtMs: now, pace: RULES.policePursuitSpeed });
     } else if (activity === "INVESTIGATE") {
-      this.pursuit.set(npcId, { lastSeenAtMs: this.now(), lastKnown: npc.moveTarget ?? { x: npc.x, z: npc.z }, arrivedAtMs: null });
+      // Acting on a report or bulletin (no fresh sighting of their own): the officer radios in first, then searches on foot
+      // at the search pace. An officer who has just seen the suspect, or has lost one mid-chase, leaves at once at walking pace.
+      const direct = immediate || (!!npc.targetCharacterId && !!freshSighting(this.deps.memory.recall(npcId, now), npc.targetCharacterId, now));
+      const departAtMs = direct ? now : Math.min(prev?.departAtMs ?? Infinity, now + RULES.policeDispatchDelayMs); // a repeat order never restarts the wait
+      this.pursuit.set(npcId, { lastSeenAtMs: now, lastKnown: npc.moveTarget ?? { x: npc.x, z: npc.z }, arrivedAtMs: null, departAtMs, pace: direct ? RULES.npcWalkSpeed : RULES.npcWalkSpeed * RULES.policeSearchPaceFactor });
     } else this.pursuit.delete(npcId);
     this.dirty.agents.add(npcId);
   }
@@ -180,7 +196,7 @@ export class RoomEngine implements WorldPort {
       players: {}, characters: {}, npcs: seedNpcs(), listings: {}, wallets: {}, missions: {}, messages: [], trades: [], counters: {},
     };
     this.events = [];
-    this.lastTickAtMs = now; this.nextMissionAtMs = null; this.nextMissionSpot = 0;
+    this.lastTickAtMs = now; this.nextMissionAtMs = null; this.nextMissionSpot = 0; this.policyAnnounced = false;
     for (const m of [this.survivalStep, this.heatBucket, this.sightingAt, this.bulletinAt, this.captureAttemptAt, this.poseAt, this.pursuit, this.storyOf, this.nav]) m.clear();
   }
   private bootRun(first: boolean, previousRunId?: string): void {
@@ -196,6 +212,18 @@ export class RoomEngine implements WorldPort {
       this.emit("WALLET_OPENED", "server", { walletId: npc.walletId, ownerId: npc.id, ownerKind: "NPC", balance: RULES.trade.startingWalletTrader }, { correlationId: corr });
     }
     this.spawnMission(corr);
+    this.announcePolicy();
+    this.dirty.snapshot = true;
+  }
+  /**
+   * Puts the document-derived police policy on the record once per run, as soon as it is loaded
+   * (at room start if it is already there, otherwise when the app reports that ingestion finished).
+   */
+  announcePolicy(): void {
+    const v = this.deps.policy?.view();
+    if (!v || this.policyAnnounced) return;
+    this.policyAnnounced = true;
+    this.emit("POLICY_INGESTED", "ndi", { documentTitle: v.documentTitle, sourceUrl: v.sourceUrl, ndiJobId: v.ndiJobId, factCount: v.facts.length });
     this.dirty.snapshot = true;
   }
   private spawnMission(correlationId?: string): void {
@@ -237,9 +265,12 @@ export class RoomEngine implements WorldPort {
   reattach(playerId: string, socketId: string | null, change: { sessionToken?: string; isDirector?: boolean } = {}): PlayerState | null {
     const p = this.state.players[playerId];
     if (!p) return null;
-    p.connected = true; p.socketId = socketId; p.disconnectedAtMs = null; p.moveDir = { x: 0, z: 0 };
+    const resync = p.connected && p.socketId === socketId; // same socket asking for a fresh snapshot: nothing changed
+    p.connected = true; p.socketId = socketId; p.disconnectedAtMs = null;
     if (change.sessionToken !== undefined) p.sessionToken = change.sessionToken;
     if (change.isDirector !== undefined) p.isDirector = change.isDirector;
+    if (resync) return p;
+    p.moveDir = { x: 0, z: 0 };
     this.emit("PLAYER_JOINED", p.id, { playerId: p.id, nickname: p.nickname, role: p.role, reconnect: true });
     this.dirty.snapshot = true;
     return p;
@@ -606,22 +637,23 @@ export class RoomEngine implements WorldPort {
     for (const n of Object.values(this.state.npcs)) {
       if (n.activity === "PURSUE") {
         const t = n.targetCharacterId ? this.state.characters[n.targetCharacterId] : undefined;
-        const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: { x: n.x, z: n.z }, arrivedAtMs: null };
+        const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: { x: n.x, z: n.z }, arrivedAtMs: null, departAtMs: now, pace: RULES.policePursuitSpeed };
         this.pursuit.set(n.id, p);
         if (!t || t.status !== "WANTED") { this.setNpcActivity(n.id, n.role === "POLICE" ? "PATROL" : "IDLE", {}); continue; }
         if (this.sees(n, t, RULES.perceptionRadius * 1.5)) { p.lastSeenAtMs = now; p.lastKnown = { x: t.x, z: t.z }; }
-        else if (now - p.lastSeenAtMs > PURSUIT_LOST_MS) { this.setNpcActivity(n.id, "INVESTIGATE", { moveTarget: p.lastKnown, targetCharacterId: t.id }); continue; }
+        else if (now - p.lastSeenAtMs > PURSUIT_LOST_MS) { this.setActivity(n.id, "INVESTIGATE", { moveTarget: p.lastKnown, targetCharacterId: t.id }, true); continue; }
         this.walk(n, p.lastKnown, RULES.policePursuitSpeed, dt);
         if (dist(n, t) <= RULES.captureRadius && now - n.lastCaptureAttemptAtMs >= RULES.captureCooldownMs) {
           n.lastCaptureAttemptAtMs = now;
           this.attemptCapture({ captorId: n.id, captorName: n.name, captorKind: "NPC", pos: n, active: true, walletId: null, selfCharacterId: null, commandId: this.nextId("ncap"), targetId: t.id });
         }
       } else if (n.activity === "INVESTIGATE") {
-        const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: n.moveTarget ?? { x: n.x, z: n.z }, arrivedAtMs: null };
+        const p = this.pursuit.get(n.id) ?? { lastSeenAtMs: now, lastKnown: n.moveTarget ?? { x: n.x, z: n.z }, arrivedAtMs: null, departAtMs: now, pace: RULES.npcWalkSpeed };
         this.pursuit.set(n.id, p);
-        const arrived = this.walk(n, n.moveTarget ?? p.lastKnown, RULES.npcWalkSpeed * 1.6, dt);
+        if (now < p.departAtMs) continue; // still radioing in: has not set off yet
+        const arrived = this.walk(n, n.moveTarget ?? p.lastKnown, p.pace, dt);
         if (arrived && p.arrivedAtMs === null) p.arrivedAtMs = now;
-        const done = (p.arrivedAtMs !== null && now - p.arrivedAtMs > INVESTIGATE_LINGER_MS) || now - p.lastSeenAtMs > 30000;
+        const done = (p.arrivedAtMs !== null && now - p.arrivedAtMs > INVESTIGATE_LINGER_MS) || now - p.departAtMs > INVESTIGATE_GIVE_UP_MS;
         if (done) this.setNpcActivity(n.id, n.patrol.length ? "PATROL" : "IDLE", {});
       } else if (n.activity === "PATROL" && n.patrol.length) {
         if (this.walk(n, n.patrol[n.patrolIndex % n.patrol.length]!, RULES.npcWalkSpeed, dt)) n.patrolIndex = (n.patrolIndex + 1) % n.patrol.length;
@@ -655,9 +687,14 @@ export class RoomEngine implements WorldPort {
   }
 
   private decayHeat(now: number, dt: number): void {
+    const hunted = new Set<string>();
+    for (const n of Object.values(this.state.npcs)) if (n.targetCharacterId && (n.activity === "INVESTIGATE" || n.activity === "PURSUE")) hunted.add(n.targetCharacterId);
     for (const c of Object.values(this.state.characters)) {
       if (c.role !== "OUTLAW" || !this.live(c) || c.heat <= 0) continue;
       if (now - c.lastHeatGainAtMs < RULES.heat.decayGraceMs || now - c.lastPoliceSightingAtMs < 500) continue;
+      // Heat only cools once nobody is on the case: an officer who is investigating or pursuing this character keeps it up,
+      // so a slow, dispatched search cannot be out-waited by standing still.
+      if (hunted.has(c.id)) continue;
       c.heat = Math.max(0, c.heat - RULES.heat.decayPerSecond * dt);
       const correlationId = this.storyOf.get(c.id);
       if (c.status === "WANTED" && c.heat < RULES.heat.wantedThreshold) {
@@ -674,6 +711,17 @@ export class RoomEngine implements WorldPort {
   }
 
   // ---------- traces / dirty tracking ----------
+  /**
+   * A background comparison call (never applied to the world) finished after its decision was already delivered.
+   * Attach it to the stored trace, persist it, feed metrics and refresh the NPC's inspector view.
+   */
+  applyShadow(update: DecisionTrace): void {
+    if (!update.shadow || update.runId !== this.state.runId) return;
+    const t = this.brains.traces().find((x) => x.id === update.id && x.agentId === update.agentId);
+    if (!t) return;
+    t.shadow = update.shadow;
+    this.onTrace(t);
+  }
   private onTrace(t: DecisionTrace): void {
     try { this.deps.persistence.saveDecision(t); } catch (err) { console.error("[persistence] saveDecision failed", (err as Error).message); }
     try { this.deps.metrics.onDecision(t); } catch (err) { console.error("[metrics] onDecision failed", (err as Error).message); }

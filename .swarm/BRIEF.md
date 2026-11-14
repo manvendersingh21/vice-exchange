@@ -41,6 +41,8 @@ characters, maps, logos or look.
   Atomic: character CAPTURED, listing HALTED_CAPTURED at 0, bounty = max(50, round(0.5*reference)) credited once to a human captor,
   events CAPTURE_SUCCEEDED, LISTING_HALTED, MARKET_PRICE_UPDATED, CHARACTER_ARCHIVED. Respawn = new character id + new ticker.
 - Heat decays 1/s after 6 s without gain while no police sees the character; dropping below 30 = ESCAPE_SUCCEEDED (+1 escape).
+  Heat does not cool while any officer is INVESTIGATING or PURSUING that character (otherwise a suspect standing still out-waits the dispatch delay).
+- Police pacing: an officer acting on a second-hand report waits RULES.policeDispatchDelayMs (10 s) and searches at npcWalkSpeed x RULES.policeSearchPaceFactor (0.5); a direct sighting is never delayed. Measured live 2026-11-14: mission -> capture of a stationary outlaw 25.6 s scripted, 28.4 s Meta, 26.3 s Drex (one run each).
 - Hunters have an avatar and wallet but no ticker. Spectators have neither.
 - Tickers are deterministic: first 3 letters of the nickname uppercased (pad with X) + "-" + 2-digit room counter, e.g. ACE-01.
 - Idempotency: every mutating command carries commandId; the engine caches the ack per (playerId, commandId) and returns it with duplicate:true.
@@ -55,7 +57,7 @@ characters, maps, logos or look.
 | npc_i2 | Dex Marlowe | INFORMANT | (62,30) | cautious, relays only what he believes | npc_t2 |
 | npc_t1 | Priya Castellan | TRADER | (17,31) | momentum trader, risk-seeking | — |
 | npc_t2 | Rook Halvorsen | TRADER | (30,41) | risk-averse, sells on bad news | — |
-| npc_p1 | Sgt. Imani Duarte | POLICE | patrol (32,28)->(62,28)->(62,54)->(32,54) | by the book | — |
+| npc_p1 | Sgt. Imani Duarte | POLICE | patrol (32,28)->(62,28)->(62,44)->(62,28)->(32,28)->(32,44) (kept out of sight of the dock job so police learn of it through the witness) | by the book | — |
 | npc_p2 | Ofc. Cole Renner | POLICE | patrol (92,28)->(92,54)->(62,54)->(62,28) | aggressive | — |
 Traders have V$2000 wallets. Roads are the gaps between CITY_MAP buildings.
 

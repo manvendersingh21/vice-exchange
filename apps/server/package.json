@@ -9,7 +9,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
-    "replay": "tsx src/replay/cli.ts"
+    "replay": "tsx src/replay/cli.ts",
+    "ndi:ingest": "tsx src/policy/cli.ts"
   },
   "dependencies": {
     "@types/ws": "^8.18.2",

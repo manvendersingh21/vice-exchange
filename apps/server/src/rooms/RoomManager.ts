@@ -15,7 +15,10 @@ export class RoomManager {
   onTick?: (room: Room) => void;
 
   create(code: string, seed: number, mode: DecisionMode = this.opts.defaultMode): Room {
-    const built = this.build({ roomId: code, code, seed, mode });
+    // roomId is unique per room instance (and so per server boot); the short code is what people type.
+    // Stored history is keyed by roomId, so a restarted server never collides with an earlier VICE-42.
+    const roomId = `${code}@${Date.now().toString(36)}${randomBytes(2).toString("hex")}`;
+    const built = this.build({ roomId, code, seed, mode });
     const room: Room = { ...built, code, timer: null, hasDirector: false };
     room.timer = setInterval(() => {
       try { room.engine.tick(); this.onTick?.(room); } catch (err) { console.error("[room] tick failed", code, err); }

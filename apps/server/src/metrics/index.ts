@@ -6,6 +6,8 @@ import type { MetricsPort } from "../domain";
 interface DecisionRec {
   source: string | null; role: string; action: string | null; status: string;
   provider: ProviderName | null; latencyMs: number | null; evalMs: number | null; rejectReason: string | null;
+  /** Background Meta comparison attached to a Drex decision (never applied). */
+  shadow?: { action: string | null; latencyMs: number | null; agrees: boolean | null } | null;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -72,7 +74,10 @@ export function createMetrics(): MetricsPort {
     },
 
     onDecision(t: DecisionTrace): void {
-      decisions.set(t.id, { source: t.decisionSource, role: t.role, action: t.chosenAction, status: t.status, provider: t.provider, latencyMs: t.latencyMs, evalMs: t.providerEvalMs, rejectReason: t.rejectReason });
+      decisions.set(t.id, {
+        source: t.decisionSource, role: t.role, action: t.chosenAction, status: t.status, provider: t.provider, latencyMs: t.latencyMs, evalMs: t.providerEvalMs, rejectReason: t.rejectReason,
+        shadow: t.shadow ? { action: t.shadow.chosenAction, latencyMs: t.shadow.latencyMs, agrees: t.shadow.agrees } : null,
+      });
     },
 
     view(): MetricsView {
@@ -80,6 +85,14 @@ export function createMetrics(): MetricsPort {
       const lat: Record<ProviderName, number[]> = { drex: [], meta: [] };
       const evals: Record<ProviderName, number[]> = { drex: [], meta: [] };
       let total = 0, rejected = 0, stale = 0;
+      // Side-by-side: Drex decisions whose background Meta call also completed. Both latencies are measured round trips.
+      const shadowDrex: number[] = [], shadowMeta: number[] = []; let agreed = 0;
+      for (const d of decisions.values()) {
+        if (d.provider === "drex" && d.shadow && d.shadow.action !== null && typeof d.shadow.latencyMs === "number" && typeof d.latencyMs === "number") {
+          shadowDrex.push(d.latencyMs); shadowMeta.push(d.shadow.latencyMs); if (d.shadow.agrees === true) agreed++;
+        }
+      }
+      const p50 = (xs: number[]) => round1(percentile([...xs].sort((a, b) => a - b), 0.5));
       for (const d of decisions.values()) {
         if (d.source === null) continue; // still pending
         total++;
@@ -100,6 +113,7 @@ export function createMetrics(): MetricsPort {
         trades: { executed, rejected: rejectedTrades, byNpc, byHuman },
         priceUpdates, captures,
         edges: [...edges.values()].map((x) => ({ ...x })),
+        shadow: shadowDrex.length ? { compared: shadowDrex.length, agreed, drexP50Ms: p50(shadowDrex), metaP50Ms: p50(shadowMeta) } : null,
       };
     },
   };

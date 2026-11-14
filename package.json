@@ -19,7 +19,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test -w @vice/server",
     "build": "npm run build -w @vice/web",
-    "replay": "npm run replay -w @vice/server --"
+    "replay": "npm run replay -w @vice/server --",
+    "ndi:ingest": "npm run ndi:ingest -w @vice/server --",
+    "e2e": "tsx e2e/run.ts"
   },
   "devDependencies": {
     "concurrently": "^10.0.7",

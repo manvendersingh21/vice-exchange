@@ -61,6 +61,13 @@ patch("scripts/game.gd",
       f"func _handle_action(name: String) -> void:\n\tif ViceBridge.active and name == \"summon_suit\":  {MARK}\n\t\treturn\n",
       "no suit summon in bridge mode")
 
+# 4b. the single-player hint toasts (which advertise content this demo does not use) stay off;
+#     the bridge shows its own messages through the HUD directly
+patch("scripts/game.gd",
+      "func _show_objective(text: String, secs := 3.5) -> void:\n",
+      f"func _show_objective(text: String, secs := 3.5) -> void:\n\tif ViceBridge.active:  {MARK}\n\t\treturn\n",
+      "no single-player hint toasts in bridge mode")
+
 # 5. bridge sessions never read or write the single-player save
 patch("scripts/autoload/save_game.gd",
       "func has_save() -> bool:\n",

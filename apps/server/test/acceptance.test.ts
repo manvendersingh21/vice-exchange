@@ -552,3 +552,60 @@ describe("AT-08 / reproducibility: scripted bot scenario", () => {
     expect(Object.values(t.engine.state.listings)[0]).toMatchObject({ status: "HALTED_CAPTURED", spotPrice: 0 });
   });
 });
+
+describe("police response pacing (RULES.policeDispatchDelayMs, policeSearchPaceFactor)", () => {
+  const officer = (t: Room) => t.engine.state.npcs["npc_p1"]!; // nearest officer to the dock witness, so the report goes to her
+
+  it("a second-hand report is investigated after the dispatch delay, on foot at the search pace, and heat does not cool meanwhile", () => {
+    const t = makeRoom(); const a = withOutlaw(t);
+    makeWanted(t, a.id);
+    const heat = t.char(a.id).heat;
+    expect(pendingFor(t, "npc_p1"), "the sergeant received the report").toBeTruthy();
+    expect(Object.keys(pendingFor(t, "npc_p1")!.req.options).sort()).toEqual(["investigate", "patrol"]); // no sighting of her own, so no pursue
+    t.scheduler.resolve("npc_p1", "investigate");
+    expect(t.events("AGENT_ACTION_APPLIED").at(-1)!.payload.detail).toContain(`dispatch in ${RULES.policeDispatchDelayMs / 1000} s`);
+    const from = { x: officer(t).x, z: officer(t).z };
+
+    t.run(RULES.policeDispatchDelayMs - 500);
+    expect(officer(t).activity).toBe("INVESTIGATE");
+    expect({ x: officer(t).x, z: officer(t).z }).toEqual(from); // still radioing in
+
+    t.run(2500); // two seconds after setting off
+    const moved = Math.hypot(officer(t).x - from.x, officer(t).z - from.z);
+    const pace = RULES.npcWalkSpeed * RULES.policeSearchPaceFactor;
+    expect(moved).toBeGreaterThan(pace * 1.5);
+    expect(moved).toBeLessThan(pace * 2.5);
+
+    // 20 s after the bulletin the suspect has stood still and nobody has seen them, yet they are still wanted:
+    // an officer is on the case, so the heat has not started to cool.
+    t.run(8000);
+    expect(t.events("NPC_OBSERVED").filter((e) => e.payload.factType === "SIGHTING")).toHaveLength(0);
+    expect(t.char(a.id)).toMatchObject({ status: "WANTED", heat });
+    expect(t.events("ESCAPE_SUCCEEDED")).toHaveLength(0);
+  });
+
+  it("an officer who has just seen the suspect is not delayed", () => {
+    const t = makeRoom(); const a = withOutlaw(t);
+    makeWanted(t, a.id);
+    t.place(a.id, officer(t).x + 10, officer(t).z); // on the Strip, in plain view of the sergeant
+    t.run(100);
+    expect(t.events("NPC_OBSERVED").some((e) => e.payload.npcId === "npc_p1" && e.payload.factType === "SIGHTING")).toBe(true);
+    const from = { x: officer(t).x, z: officer(t).z };
+    t.scheduler.resolve("npc_p1", "investigate");
+    expect(t.events("AGENT_ACTION_APPLIED").at(-1)!.payload.detail).not.toContain("dispatch in");
+    t.run(1000);
+    const moved = Math.hypot(officer(t).x - from.x, officer(t).z - from.z);
+    expect(moved).toBeGreaterThan(RULES.npcWalkSpeed * 0.8); // left at once, at walking pace
+  });
+
+  it("with no officer on the case, heat cools and the suspect escapes", () => {
+    const t = makeRoom(); const a = withOutlaw(t);
+    makeWanted(t, a.id);
+    t.scheduler.resolve("npc_p1", "patrol"); t.scheduler.resolve("npc_p2", "patrol");
+    t.place(a.id, 110, 70); // far corner, out of every patrol's sight
+    t.run(RULES.heat.decayGraceMs + 15000);
+    expect(t.events("ESCAPE_SUCCEEDED")).toHaveLength(1);
+    expect(t.char(a.id)).toMatchObject({ status: "ACTIVE", successfulEscapes: 1 });
+    expect(t.events("WANTED_STATUS_CHANGED").at(-1)!.payload.wanted).toBe(false);
+  });
+});

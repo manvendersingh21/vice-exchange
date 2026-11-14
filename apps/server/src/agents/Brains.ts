@@ -127,8 +127,11 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
         return r.ok ? `${action === "buy" ? "bought" : "sold"} 1 ${ticker} at V$${r.trade.executionPrice}` : `${action} order for ${ticker} was rejected: ${r.reason}`;
       }
       case "POLICE:investigate": {
+        // Same test the engine applies: without a fresh sighting of their own, the officer waits for dispatch, then searches on foot.
+        const direct = !!freshSighting(memory.recall(npc.id, world.now()), subject, world.now());
         world.setNpcActivity(npc.id, "INVESTIGATE", { moveTarget: pos(m, npc), targetCharacterId: subject });
-        return `heading to the last known location of ${about}`;
+        return direct ? `heading to the last known location of ${about}`
+          : `investigating ${about}: dispatch in ${Math.round(RULES.policeDispatchDelayMs / 1000)} s, then on foot to the last known location`;
       }
       case "POLICE:pursue":
         world.setNpcActivity(npc.id, "PURSUE", { targetCharacterId: subject, moveTarget: null });

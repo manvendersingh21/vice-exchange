@@ -51,6 +51,8 @@ export interface Config {
   metaApiKey: string;
   metaBaseUrl: string;
   metaModel: string;
+  /** SHADOW_META: in drex mode also ask Meta in the background (never applied) for a live side-by-side. Default on; only acts when both keys exist. */
+  shadowMeta: boolean;
 }
 
 export const config: Config = {
@@ -67,6 +69,7 @@ export const config: Config = {
   metaApiKey: str("META_API_KEY") || str("LLAMA_API_KEY"),
   metaBaseUrl: str("META_BASE_URL", "https://api.meta.ai/v1"),
   metaModel: str("META_DECISION_MODEL") || str("META_MODEL", "muse-ember-1.0"),
+  shadowMeta: !/^(0|false|off|no)$/i.test(str("SHADOW_META", "on")),
 };
 
 /** Safe-to-log / safe-to-serve view of the config: booleans only, never key material. */
