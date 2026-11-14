@@ -220,7 +220,7 @@ const main = [
     say: "The track is Swarm Intelligence: multi-agent systems. Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, characters that think for themselves, or a team of agents dividing up a research task. This project is the first two at once." },
   { id: "game", kind: "card", bg: (T("bg0") ?? C0) + 27000, len: 8, png: gamePng,
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it." },
-  { id: "how-built", kind: "card", bg: C0 + 0, len: 14, png: buildPng,
+  { id: "how-built", kind: "card", bg: (T("bg0") ?? C0) + (process.env.ONLY === "opening" ? 42500 : 0), len: 14, png: buildPng,
     say: "One step of the swarm. An agent sees something, or gets a message. One Drex call, built only from what that agent knows, returns a choice with probabilities. The server checks it is legal, applies it, and that triggers the next agent." },
   { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 6, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker.",
     say: "Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself." },
@@ -268,6 +268,7 @@ const npcs = [
 const which = process.env.ONLY;
 if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, gamePng, "voice:", VOICE); }
 else if (which === "voice") { const o = `${WORK}/voice-test.wav`; speak(main[1].say, o); console.log("voice:", VOICE, "test line", dur(o).toFixed(1), "s ->", o); }
+else if (which === "opening") { build("opening", main.filter(Boolean).slice(0, 5)); }
 else {
   if (!which || which === "main") build("vice-exchange-demo", main);
   if (!which || which === "npcs") build("vice-exchange-npcs", npcs);
