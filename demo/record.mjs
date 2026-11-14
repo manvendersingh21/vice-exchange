@@ -101,8 +101,8 @@ const waitEvent = async (pred, ms) => { const t0 = Date.now(); while (Date.now()
 try {
   // ---- Part 1: agent versus agent, seen by a spectator. The fugitive "Ryder" is itself a Drex-driven agent. ----
   C = await browser(9443, "C");
-  await C.nav(`${BASE}/?nick=Judge&role=SPECTATOR&room=VICE-42&auto=1&view=2d`);
-  await sleep(3500);
+  await C.nav(`${BASE}/?nick=Judge&role=SPECTATOR&room=VICE-42&auto=1&view=3d`);
+  await sleep(5000);
   let s = await snap();
   const ryder = s.characters.find((c) => /^Ryder/i.test(c.nickname) && c.role === "OUTLAW");
   await C.cast(true);
@@ -156,6 +156,10 @@ try {
   await sleep(relist ? 7000 : 2000);
   s = await snap();
   mark("traders1", { relist: relist ? relist.payload.ticker : null, traders: traders(s), trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]) });
+  // Forty seconds of the city overview with nothing selected: background footage for the title and text cards.
+  mark("bg0");
+  await C.drag(500, 300, 640, 320, 6000); await sleep(14000); await C.drag(640, 320, 520, 300, 6000); await sleep(14000);
+  mark("bg1");
   await C.cast(false);
   save(all());
   if (process.env.HUMANS) {

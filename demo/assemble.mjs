@@ -50,7 +50,8 @@ function listFile(frames, t0, t1, name) {
   const out = `${WORK}/${name}.txt`; writeFileSync(out, s);
   return { out, real: (t1 - t0) / 1000, t0 };
 }
-const ENC = ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "25"];
+const FPS = 30;
+const ENC = ["-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(FPS), "-fps_mode", "cfr"];
 const FRAME = `scale=1760:990,pad=1920:1080:80:0:color=${BG}`;
 
 /** Renders one segment to mp4 of exactly `len` seconds; returns { file, len, map(wallMs) -> seconds into segment }. */
@@ -60,28 +61,43 @@ function seg(s, i, prefix) {
   const len = s.len;
   let speed = 1, t0 = 0;
   if (s.kind === "card") {
-    ff(["-loop", "1", "-i", s.png, "-t", String(len), "-vf", "fps=25,scale=1920:1080", ...ENC, out]);
+    // The game keeps playing behind every card: real footage from the take under the card at about 75 percent opacity.
+    let bg = null;
+    if (s.bg != null && D.framesC?.length) { try { bg = listFile(D.framesC, s.bg, s.bg + len * 1000, `${prefix}-${i}-bg`); } catch { bg = null; } }
+    if (bg) ff(["-f", "concat", "-safe", "0", "-i", bg.out, "-loop", "1", "-i", s.png, "-filter_complex", `[0:v]fps=${FPS},scale=1920:1080,tpad=stop_mode=clone:stop_duration=20[b];[1:v]fps=${FPS},scale=1920:1080,format=yuv420p[c];[b][c]blend=all_expr='A*0.26+B*0.74'`, "-t", String(len), ...ENC, out]);
+    else ff(["-loop", "1", "-i", s.png, "-t", String(len), "-vf", `fps=${FPS},scale=1920:1080`, ...ENC, out]);
   } else if (s.kind === "still") {
-    ff(["-loop", "1", "-i", s.png, "-loop", "1", "-i", cap, "-filter_complex", `[0:v]fps=25,${FRAME}[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
-  } else if (s.kind === "clip" && !cap) {
-    speed = Math.max(1, (s.end - s.start) / len);
-    ff(["-ss", String(s.start), "-t", String(s.end - s.start), "-i", s.src, "-vf", `setpts=PTS/${speed.toFixed(4)},fps=25,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,tpad=stop_mode=clone:stop_duration=20`, "-t", String(len), ...ENC, out]);
+    ff(["-loop", "1", "-i", s.png, "-loop", "1", "-i", cap, "-filter_complex", `[0:v]fps=${FPS},${FRAME}[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
   } else if (s.kind === "clip") {
-    speed = Math.max(1, (s.end - s.start) / len);
-    ff(["-ss", String(s.start), "-t", String(s.end - s.start), "-i", s.src, "-loop", "1", "-i", cap, "-filter_complex",
-      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=25,${FRAME},tpad=stop_mode=clone:stop_duration=20[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+    // Real time only: never sped up. The window is cut to the segment length (tail: keep the end of the shot).
+    const win = Math.min(len, s.end - s.start), st = s.tail ? s.end - win : s.start;
+    const base = `framerate=fps=${FPS},loop=loop=-1:size=${Math.max(2, Math.floor(win * FPS) - 1)}:start=0,setpts=N/${FPS}/TB`;
+    if (!cap) ff(["-ss", String(st), "-t", String(win), "-i", s.src, "-vf", `${base},scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080`, "-t", String(len), ...ENC, out]);
+    else ff(["-ss", String(st), "-t", String(win), "-i", s.src, "-loop", "1", "-i", cap, "-filter_complex", `[0:v]${base},${FRAME}[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
   } else if (s.kind === "duo") {
     const a = listFile(D.framesA, s.t0, s.t1, `${prefix}-${i}-a`), b = listFile(D.framesB, s.t0, s.t1, `${prefix}-${i}-b`);
     speed = Math.max(1, a.real / len); t0 = s.t0;
     ff(["-f", "concat", "-safe", "0", "-i", a.out, "-f", "concat", "-safe", "0", "-i", b.out, "-loop", "1", "-i", cap, "-filter_complex",
-      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=25,scale=960:540[a];[1:v]setpts=PTS/${speed.toFixed(4)},fps=25,scale=960:540[b];[a][b]hstack,pad=1920:1080:0:225:color=${BG},tpad=stop_mode=clone:stop_duration=20[v];[v][2:v]overlay=0:990`,
+      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=${FPS},scale=960:540[a];[1:v]setpts=PTS/${speed.toFixed(4)},fps=${FPS},scale=960:540[b];[a][b]hstack,pad=1920:1080:0:225:color=${BG},tpad=stop_mode=clone:stop_duration=20[v];[v][2:v]overlay=0:990`,
       "-t", String(len), ...ENC, out]);
   } else {
-    const l = listFile(D[`frames${s.cam}`], s.t0, s.t1, `${prefix}-${i}`);
-    speed = Math.max(1, l.real / len); t0 = s.t0;
-    const fr = s.crop === "panels" ? `crop=836:620:764:40,scale=1335:990,pad=1920:1080:292:0:color=${BG}` : s.crop === "bottom" ? `crop=1600:480:0:420,scale=1920:576,pad=1920:1080:0:207:color=${BG}` : FRAME;
-    ff(["-f", "concat", "-safe", "0", "-i", l.out, "-loop", "1", "-i", cap, "-filter_complex",
-      `[0:v]setpts=PTS/${speed.toFixed(4)},fps=25,${fr},tpad=stop_mode=clone:stop_duration=20[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+    // Real time only: the window is cut to the segment length (tail: keep the end), never sped up.
+    const winMs = Math.min(len * 1000, s.t1 - s.t0), w0 = s.tail ? s.t1 - winMs : s.t0, w1 = w0 + winMs;
+    const l = listFile(D[`frames${s.cam}`], w0, w1, `${prefix}-${i}`);
+    speed = 1; t0 = w0; s.t0 = w0; s.t1 = w1;
+    const sp = `fps=${FPS}`;
+    if (s.crop === "split") {
+      // Game on the left, trading-floor terminal on the right, both full height: the frame is always filled.
+      const g0 = s.game ?? 26;
+      ff(["-f", "concat", "-safe", "0", "-i", l.out, "-ss", String(g0), "-t", String(len + 1), "-i", CLIP, "-loop", "1", "-i", cap, "-filter_complex",
+        `[0:v]${sp},crop=836:860:764:40,scale=962:990,tpad=stop_mode=clone:stop_duration=20[t];[1:v]framerate=fps=${FPS},scale=1760:990,crop=958:990:401:0,eq=brightness=-0.05,tpad=stop_mode=clone:stop_duration=20[g];[g][t]hstack=inputs=2,pad=1920:1080:0:0:color=${BG}[v];[v][2:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+    } else {
+      // Zoom: a 16:9 region of the terminal scaled up to fill the frame so the panel can be read.
+      const z = s.crop === "inspector" ? "crop=836:470:764:300" : s.crop === "cards" ? "crop=836:470:764:40" : s.crop === "table" ? "crop=1100:619:0:281" : null;
+      const fr = z ? `${z},scale=1760:990,pad=1920:1080:80:0:color=${BG}` : FRAME;
+      ff(["-f", "concat", "-safe", "0", "-i", l.out, "-loop", "1", "-i", cap, "-filter_complex",
+        `[0:v]${sp},${fr},tpad=stop_mode=clone:stop_duration=20[v];[v][1:v]overlay=0:990`, "-t", String(len), ...ENC, out]);
+    }
   }
   return { file: out, len, speed, map: (t) => (t0 && t >= s.t0 && t <= s.t1 ? (t - s.t0) / 1000 / speed : null) };
 }
@@ -104,7 +120,7 @@ function build(name, segsIn) {
     s.aiff = `${WORK}/${name}-say-${i}.wav`;
     speak(s.say, s.aiff);
     s.sayLen = dur(s.aiff);
-    s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.8) * 10) / 10);
+    s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.55) * 10) / 10);
   });
   // Stay at or under 3:08: drop the least important shots first.
   for (const drop of ["replay", "traders", "ota-carheli", "memory"]) { if (segs.reduce((a, s) => a + s.len, 0) <= 188) break; if (name === "vice-exchange-demo") { console.log("over length, dropping", drop); segs = segs.filter((s) => s.id !== drop); } }
@@ -194,58 +210,56 @@ const gamePng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6d
 const hasRyder = !!M.city?.ryder;
 const main = [
   { id: "hype", kind: "clip", ...part("flyover", 0, 0.08), len: 6, say: "Are you guys ready for G T A six? Say woo! Well, it's not out yet. So, inspired by open-world games like it, we built our own. Vice Exchange: a city where every agent is a trader." },
-  { id: "title", kind: "card", len: 3, png: card(["Open Theft Auto, rebuilt as a trading floor where every agent decides with Drex.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
+  { id: "title", kind: "card", bg: (T("bg0") ?? C0) + 0, len: 3, png: card(["Open Theft Auto, rebuilt as a trading floor where every agent decides with Drex.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
     say: "Built on Open Theft Auto, an open source city. All the money is fictional game credits." },
-  { id: "track", kind: "card", len: 15, png: trackPng,
+  { id: "track", kind: "card", bg: (T("bg0") ?? C0) + 6500, len: 15, png: trackPng,
     say: "The track is Swarm Intelligence: multi-agent systems. Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, characters that think for themselves, or a team of agents dividing up a research task. This project is the first two at once." },
-  { id: "game", kind: "card", len: 8, png: gamePng,
+  { id: "game", kind: "card", bg: (T("bg0") ?? C0) + 27000, len: 8, png: gamePng,
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it." },
-  { id: "how-built", kind: "card", len: 14, png: buildPng,
+  { id: "how-built", kind: "card", bg: C0 + 0, len: 14, png: buildPng,
     say: "One step of the swarm. An agent sees something, or gets a message. One Drex call, built only from what that agent knows, returns a choice with probabilities. The server checks it is legal, applies it, and that triggers the next agent." },
-  { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 8, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker.",
+  { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 6, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker.",
     say: "Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself." },
-  { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, tag: "COORDINATE", caption: "A job is witnessed and reported. Police publish a bulletin: WANTED, and the price falls.",
-    say: "A job is done. A witness sees it and reports. Police put out a bulletin. The outlaw is wanted, and the price falls." },
-  inTake(tWit) && { id: "terminal-chain", cam: "C", crop: "panels", t0: Math.max(C0, tWit - 2500), t1: Math.min(tCapR ? tCapR - 300 : T("ryder1"), (tBul ?? tWit) + 9000), len: 11, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
-    say: "The trading floor terminal shows every hop. Each card is one Drex decision, with the options, the probabilities and the latency. The graph shows who told whom." },
-  !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", crop: "panels", t0: C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 10, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
-    say: "The trading floor terminal shows every decision as it happens, with the options, the probabilities and the latency." },
-  has("crew0") && { id: "crew", cam: "C", crop: "panels", t0: T("crew0") + 2500, t1: Math.min(T("crew0") + 10500, tCapR ? tCapR - 300 : Infinity), len: 7, tag: "THEY TEAM UP", caption: "Two human hunters form a crew to split the bounty. The trader agents see it and each decides what to do about it.", src: "decision cards: live values from this run",
+  inTake(tWit) && { id: "terminal-chain", cam: "C", game: 18,  t0: Math.max(C0, tWit - 2500), t1: Math.min(tCapR ? tCapR - 300 : T("ryder1"), (tBul ?? tWit) + 9000), len: 8, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
+    say: "They coordinate. A witness reports a job, police put out a bulletin, and the price falls. On the trading floor terminal, each card is one Drex decision, with its options, probabilities and latency." },
+  !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", game: 18,  t0: C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 8, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
+    say: "They coordinate. A witness reports a job, police put out a bulletin, and the price falls. On the trading floor terminal, each card is one Drex decision, with its options, probabilities and latency." },
+  has("crew0") && { id: "crew", cam: "C", game: 39,  t0: T("crew0") + 2500, t1: Math.min(T("crew0") + 10500, tCapR ? tCapR - 300 : Infinity), len: 6, tag: "THEY TEAM UP", caption: "Two human hunters form a crew to split the bounty. The trader agents see it and each decides what to do about it.", src: "decision cards: live values from this run",
     say: "They team up. Two human hunters form a crew to split the bounty. The traders see it, and each one decides what to do about it." },
-  tCapR && has("ryder1") && T("ryder1") - tCapR > 7000 && { id: "pnl", cam: "C", crop: "panels", t0: tCapR + 5500, t1: T("ryder1"), len: 6, tag: "AGENT P&L", caption: "After the capture: the officer is paid the bounty, the witness who reported gets a tip, and the traders mark their books.", src: "earnings shown are this run's",
+  tCapR && has("ryder1") && T("ryder1") - tCapR > 7000 && { id: "pnl", cam: "C", crop: "inspector", t0: tCapR + 5500, t1: T("ryder1"), len: 5, tag: "AGENT P&L", caption: "After the capture: the officer is paid the bounty, the witness who reported gets a tip, and the traders mark their books.", src: "earnings shown are this run's",
     say: "Every agent is out for its own profit. The officer earns the bounty. The witness who reported earns a tip. The traders mark their books." },
-  has("insWitness", "insTrader1end") && { id: "memory", cam: "C", crop: "panels", t0: T("insWitness"), t1: T("insTrader1end"), len: 9, tag: "PRIVATE MEMORY", caption: "Each agent knows only what it saw or was told: source and hop count on every fact.",
+  has("insWitness", "insTrader1end") && { id: "memory", cam: "C", crop: "inspector", t0: T("insWitness"), t1: T("insTrader1end"), len: 6, tag: "PRIVATE MEMORY", caption: "Each agent knows only what it saw or was told: source and hop count on every fact.",
     say: "Each agent knows only what it saw, or what it was told. Every fact carries its source and how many hands it passed through." },
-  has("traders0", "traders1") && { id: "traders", cam: "C", crop: "panels", t0: T("traders0"), t1: T("traders1"), len: 8, tag: "TRADERS IN A SIMULATED MARKET", caption: "Traders in a simulated market, each deciding with Drex to grow its own V$: a new ticker lists and both trader agents decide.", src: "live values from this run",
+  has("traders0", "traders1") && { id: "traders", cam: "C", crop: "cards", t0: T("traders0"), t1: T("traders1"), len: 6, tag: "TRADERS IN A SIMULATED MARKET", caption: "Traders in a simulated market, each deciding with Drex to grow its own V$: a new ticker lists and both trader agents decide.", src: "live values from this run",
     say: "Traders in a simulated market, each deciding with Drex to grow its own money. A new stock lists, and both traders make their call." },
-  has("insTrader1", "insTrader2end") && { id: "traders-wallets", cam: "C", crop: "panels", t0: T("insTrader1"), t1: T("insTrader2end"), len: 8, tag: "OUT FOR PROFIT", caption: traderCap, src: "wallets and trades read from this run",
+  has("insTrader1", "insTrader2end") && { id: "traders-wallets", cam: "C", crop: "inspector", t0: T("insTrader1"), t1: T("insTrader2end"), len: 6, tag: "OUT FOR PROFIT", caption: traderCap, src: "wallets and trades read from this run",
     say: traderSay2 },
-  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.62), len: 9, tag: "THEY TURN ON EACH OTHER", caption: "Ryder fires his stun pulse at a human hunter. An officer pursues on a Drex decision and captures him: V$0.",
+  { id: "ota-hunt", kind: "clip", tail: true, ...part("hunt", 0.42, 0.62), len: 6, tag: "THEY TURN ON EACH OTHER", caption: "Ryder fires his stun pulse at a human hunter. An officer pursues on a Drex decision and captures him: V$0.",
     say: "Ryder turns on a human hunter and stuns him. Then an officer, on a Drex decision, runs him down. His stock goes to zero." },
-  { id: "ota-capture", kind: "clip", ...part("capture", 0.62, 0.84), len: 9, tag: "COMPETE FOR THE BOUNTY", caption: "The hunter chases the next fugitive, stuns him and makes the capture: the ticker goes to exactly V$0 and the bounty is paid.",
+  { id: "ota-capture", kind: "clip", tail: true, ...part("capture", 0.62, 0.84), len: 6, tag: "COMPETE FOR THE BOUNTY", caption: "The hunter chases the next fugitive, stuns him and makes the capture: the ticker goes to exactly V$0 and the bounty is paid.",
     say: "The hunter goes after the next one, stuns him, and takes the bounty. The longer he survived, the bigger it is." },
-  { id: "ota-carheli", kind: "clip", ...carHeli, len: 8, caption: "Still Open Theft Auto (MIT-licensed, open source): steal a car or take the helicopter.",
+  { id: "ota-carheli", kind: "clip", tail: true, ...carHeli, len: 5, caption: "Still Open Theft Auto (MIT-licensed, open source): steal a car or take the helicopter.",
     say: "And it is still Open Theft Auto. Steal a car, or take the helicopter." },
-  has("insPolice", "insPoliceend") && { id: "ndi", cam: "C", crop: "panels", t0: T("insPolice"), t1: T("insPoliceend"), len: 7, tag: "NDI", caption: "Police decisions cite facts from a real document.", src: "SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
+  has("insPolice", "insPoliceend") && { id: "ndi", cam: "C", crop: "inspector", t0: T("insPolice"), t1: T("insPoliceend"), len: 5, tag: "NDI", caption: "Police decisions cite facts from a real document.", src: "SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
     say: "Police decisions cite a real San Francisco police order, parsed with N D I." },
-  has("proof", "proofend") && { id: "experiment", cam: "C", crop: "bottom", t0: T("proof") + 3000, t1: T("proofend"), len: 12, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then one seed, three ways: scripted, Meta LLM, Drex (sped up).", src: "numbers read from this recording's own run",
+  has("proof", "proofend") && { id: "experiment", cam: "C", tail: true, crop: "table", t0: T("proof") + 3000, t1: T("proofend"), len: 9, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then one seed, three ways: scripted, Meta LLM, Drex (sped up).", src: "numbers read from this recording's own run",
     say: `${countsSay} Then the same seed runs three ways: scripted, a language model, and Drex.` },
   has("verify") && { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 3, caption: `The event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
     say: "And the log replays with zero model calls." },
-  { id: "end", kind: "card", len: 4, png: card(["Every agent is out for its own profit. They team up, and they turn on each other.", "The longer one survives, the more it is worth, and the bigger the bounty on its head.", `Recorded from real runs · ${TESTS ? TESTS + " automated tests passing · " : ""}built on Open Theft Auto (MIT)`], "card-end"),
+  { id: "end", kind: "card", bg: C0 + 14500, len: 4, png: card(["Every agent is out for its own profit. They team up, and they turn on each other.", "The longer one survives, the more it is worth, and the bigger the bounty on its head.", `Recorded from real runs · ${TESTS ? TESTS + " automated tests passing · " : ""}built on Open Theft Auto (MIT)`], "card-end"),
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. Vice Exchange." },
 ];
 const npcs = [
   { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 8, caption: "Nine agents in the modified Open Theft Auto city: witnesses, informants, traders, police and the fugitive Ryder.",
-    say: "Nine agents share this city: witnesses, informants, traders, police, and a fugitive. Every one of them decides with Drex." },
-  { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, caption: "A job is witnessed and reported: bulletin, WANTED.",
-    say: "When a job is done, only the agents who saw it react. A witness reports, and a bulletin goes out." },
-  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 12, caption: `Several agents decide at once. ${who}`,
-    say: "Traders and officers each make their own call, shown live with the options and the probabilities." },
-  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.62), len: 9, caption: "The fugitive agent stuns a human hunter; an officer captures him on a Drex decision.",
-    say: "The fugitive stuns a hunter. An officer runs him down, and the stock goes to zero." },
-  { id: "ota-capture", kind: "clip", ...part("capture", 0.62, 0.84), len: 8, caption: "The hunter stuns the next fugitive and takes the bounty.",
-    say: "Then the hunter takes the next one, and the bounty." },
+    say: "Nine agents share this city: two witnesses, two informants, two traders, two police, and Ryder, a fugitive. Every one of them decides with Drex, and none can see what the others know." },
+  has("city", "ryder1") && { id: "terminal", cam: "C", game: 18, t0: C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 12, caption: `Several agents decide at once. ${who}`,
+    say: "A witness reports a job. Police put out a bulletin. Then traders and officers each make their own call, shown live on the trading floor, with the options and the probabilities for every decision." },
+  has("crew0") && { id: "crew", cam: "C", game: 39, t0: T("crew0") + 2500, t1: Math.min(T("crew0") + 10500, tCapR ? tCapR - 300 : Infinity), len: 6, caption: "Two human hunters form a crew; the trader agents see it and each decides.",
+    say: "Two human hunters team up as a crew. The traders see it, and each one decides what to do about it." },
+  { id: "ota-hunt", kind: "clip", tail: true, ...part("hunt", 0.42, 0.62), len: 8, caption: "The fugitive agent stuns a human hunter; an officer captures him on a Drex decision.",
+    say: "The fugitive turns on a hunter and stuns him. Then an officer runs him down, and his stock goes to zero." },
+  { id: "ota-capture", kind: "clip", tail: true, ...part("capture", 0.62, 0.84), len: 8, caption: "The hunter stuns the next fugitive and takes the bounty.",
+    say: "The hunter goes after the next one, stuns him, and takes the bounty. Every agent is out for its own profit." },
 ];
 const which = process.env.ONLY;
 if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, gamePng, "voice:", VOICE); }

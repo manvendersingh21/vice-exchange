@@ -78,6 +78,10 @@ export function createApp(o: AppOptions): App {
     import("../bridge/index").then((m) => { bridge = m.attachWorldBridge(httpServer, rooms); })
       .catch((err: unknown) => console.error("[bridge] not mounted:", err instanceof Error ? err.message : err));
   }
+  // One game engine publishes its frames here and browsers watch (and the same player's browser plays) in the city pane.
+  let stream: { stats(): { publishers: number; viewers: number; frames: number }; close(): void } | null = null;
+  import("../bridge/stream").then((m) => { stream = m.attachWorldStream(httpServer, rooms); })
+    .catch((err: unknown) => console.error("[stream] not mounted:", err instanceof Error ? err.message : err));
 
   const room = (code: unknown) => rooms.get(String(code ?? ""));
   app.get("/health", (_req, res) => {
@@ -88,6 +92,7 @@ export function createApp(o: AppOptions): App {
       shadowMeta: !!o.providers.shadowMeta && o.providers.naceApiKey.length > 0 && o.providers.metaApiKey.length > 0,
       policyLoaded: !!o.policy?.view(),
       bridgeClients: bridge?.clients() ?? 0, udp: (() => { const u = bridge?.udp?.(); return u ? { enabled: u.enabled, port: u.port, clients: u.clients } : null; })(), credits: CREDITS_NOTICE,
+      stream: stream?.stats() ?? null,
     });
   });
   app.get("/api/rooms/:code/snapshot", (req, res) => { const r = room(req.params.code); return r ? res.json(r.engine.snapshot()) : res.status(404).json({ error: "ROOM_NOT_FOUND" }); });
@@ -141,6 +146,7 @@ export function createApp(o: AppOptions): App {
     close: () => new Promise<void>((resolve) => {
       rooms.stop();
       try { bridge?.close(); } catch { /* already closed */ }
+      try { stream?.close(); } catch { /* already closed */ }
       void io.close(() => { if (!o.persistence) { try { persistence.close(); } catch { /* already closed */ } } resolve(); });
     }),
   };

@@ -113,3 +113,14 @@ High-rate, loss-tolerant traffic goes over UDP when it is available:
 - The browser-embedded WORLD view cannot use UDP (browsers have no UDP sockets); it always uses WebSocket.
 - Measured 2026-11-14, headless client on this Mac, same scripted check run: 290 world-state updates over UDP
   (29 Hz, 0% loss) against 105 over WebSocket.
+
+## Stream mode (server and game side only; not used by the browser UI)
+
+`--vice-stream` makes a native client publish its own rendered frames (960 px wide JPEG, encoded on a worker thread, up
+to 30 fps, frames skipped while the socket is draining) on `ws /stream?role=pub&token=<session token>`; the server relay
+(`apps/server/src/bridge/stream.ts`) sends the newest frame to subscribers (`/stream?role=sub&token=...` for the same
+player, who may also send keyboard and mouse input back; `/stream?role=sub&room=CODE` is view-only). It is inert unless
+a client is started with the flag. A browser view for it was built and then shelved at the founder's request
+(`.swarm/shelved/WorldStream.tsx`, `.swarm/oneworld-stream-web.patch`): the UI keeps its own 3D city. In one headed
+Chrome run before it was shelved it showed 23 to 25 fps at 17 to 18 ms on this Mac. `/health` reports
+`stream: { publishers, viewers, frames }`.

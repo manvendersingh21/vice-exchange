@@ -38,6 +38,14 @@ if not dest.exists() or dest.read_text() != src.read_text():
     shutil.copyfile(src, dest)
     changed.append("scripts/autoload/vice_bridge.gd: copied")
 
+# 1c. the world-stream publisher helper (--vice-stream; see vice_stream.gd)
+import shutil as _sh
+_stream_src = here / "vice_stream.gd"
+_stream_dest = target / "scripts" / "autoload" / "vice_stream.gd"
+if _stream_src.exists() and (not _stream_dest.exists() or _stream_dest.read_bytes() != _stream_src.read_bytes()):
+    _sh.copyfile(_stream_src, _stream_dest)
+    changed.append("scripts/autoload/vice_stream.gd: copied")
+
 # 1b. the UDP fast-path helper the autoload loads on demand (see vice_udp.gd)
 udp_dest = target / "scripts" / "autoload" / "vice_udp.gd"
 udp_src = here / "vice_udp.gd"
