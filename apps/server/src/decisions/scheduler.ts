@@ -23,7 +23,7 @@ interface Job {
   provider: DecisionProvider; gen: number; done: boolean; started: boolean;
   controller: AbortController; timer: ReturnType<typeof setTimeout> | null; deadlineAt: number;
 }
-interface Health { calls: number[]; inFlight: number; failures: number; circuitOpenUntil: number | null; lastOkAtMs: number | null; lastErrorType: string | null }
+interface Health { calls: number[]; inFlight: number; failures: number; circuitOpenUntil: number | null; lastOkAtMs: number | null; lastErrorType: string | null; lastOutcome: "ok" | "fallback" | null }
 
 /**
  * Provider error text is vendor-controlled, is broadcast to every client and is stored in SQLite. Strip anything
@@ -47,8 +47,8 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
   const queue: Job[] = [];
   const active = new Map<string, Job>(); // dedupeKey -> job (queued or in flight)
   const health: Record<ProviderName, Health> = {
-    drex: { calls: [], inFlight: 0, failures: 0, circuitOpenUntil: null, lastOkAtMs: null, lastErrorType: null },
-    meta: { calls: [], inFlight: 0, failures: 0, circuitOpenUntil: null, lastOkAtMs: null, lastErrorType: null },
+    drex: { calls: [], inFlight: 0, failures: 0, circuitOpenUntil: null, lastOkAtMs: null, lastErrorType: null, lastOutcome: null },
+    meta: { calls: [], inFlight: 0, failures: 0, circuitOpenUntil: null, lastOkAtMs: null, lastErrorType: null, lastOutcome: null },
   };
   const providers: Record<ProviderName, DecisionProvider> = { drex: deps.drex, meta: deps.meta };
   const now = (): number => deps.clock.now();
@@ -81,8 +81,11 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
     const drex = healthView("drex"), meta = healthView("meta");
     let badge = "SCRIPTED";
     if (mode !== "scripted") {
-      const h = mode === "drex" ? drex : meta;
-      badge = `${mode.toUpperCase()}: ${h.state === "LIVE" ? "LIVE" : "FALLBACK"}`;
+      // LIVE only after the provider really answered the latest decision; PENDING before its first answer;
+      // FALLBACK whenever the latest decision in this mode was not decided by the provider.
+      const h = mode === "drex" ? drex : meta, last = health[mode].lastOutcome;
+      const word = !h.configured || h.state === "DOWN" || last === "fallback" ? "FALLBACK" : last === null ? "PENDING" : "LIVE";
+      badge = `${mode.toUpperCase()}: ${word}`;
     }
     return { mode, drex, meta, pending: active.size, badge };
   }
@@ -101,7 +104,8 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
       citations: req.citations ?? [], shadow: null,
     };
   }
-  const valid = (req: DecisionRequest, label: string): string => (label in req.options ? label : Object.keys(req.options)[0]!);
+  const offered = (req: DecisionRequest, label: string): boolean => Object.hasOwn(req.options, label);
+  const valid = (req: DecisionRequest, label: string): string => (offered(req, label) ? label : Object.keys(req.options)[0]!);
 
   function finish(job: Job): void {
     if (job.done) return;
@@ -121,6 +125,7 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
     if (job.done) return;
     const t = job.trace;
     t.status = status; t.decisionSource = "fallback"; t.chosenAction = valid(job.req, job.req.safeAction);
+    health[job.provider.name].lastOutcome = "fallback";
     t.errorType = errorType; t.errorMessage = redactSecrets(message);
     // No provider answer was used: confidence/probabilities stay null by construction.
     finish(job);
@@ -147,11 +152,16 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
       if (job.gen !== gen) return;
       s.agrees = s.chosenAction !== null && job.trace.providerChoice !== null ? s.chosenAction === job.trace.providerChoice : null;
       job.trace.shadow = s;
+      if (s.errorType === null) { health[p].failures = 0; health[p].lastOkAtMs = now(); health[p].lastErrorType = null; }
       if (job.done) { try { deps.onShadow?.(job.trace); } catch { /* ignore */ } }
     };
     deps.meta.decide({ question: job.req.question, options: job.req.options, state: job.req.state }, { timeoutMs: deadlineFor("meta") })
       .then((r) => attach({ ...base, model: r.model, chosenAction: r.choice, latencyMs: r.latencyMs, providerRequestId: r.requestId }))
-      .catch((e) => attach({ ...base, errorType: e instanceof ProviderError ? e.kind : "network" }));
+      .catch((e) => {
+        // A rejected or rate-limited Meta key must show in Meta's health and open its breaker, not be retried on every decision.
+        recordFailure(p, e instanceof ProviderError ? e : new ProviderError("network", String(e), { retryable: true }));
+        attach({ ...base, errorType: e instanceof ProviderError ? e.kind : "network" });
+      });
   }
 
   function start(job: Job): void {
@@ -166,21 +176,24 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
     job.trace.provider = p; job.trace.model = job.provider.model;
     runShadow(job);
     let settled = false;
-    const release = (): void => { if (!settled) { settled = true; h.inFlight -= 1; } };
+    // A freed slot always restarts the queue (a timed-out or cancelled call frees its slot only when its promise settles).
+    const release = (): void => { if (!settled) { settled = true; h.inFlight -= 1; queueMicrotask(pump); } };
     job.provider.decide({ question: job.req.question, options: job.req.options, state: job.req.state }, { signal: job.controller.signal, timeoutMs: remaining })
       .then((r: ProviderResult) => {
         release();
         if (job.gen !== gen) return;
         if (job.done) { h.lastOkAtMs = now(); return; } // late answer after the deadline: discarded
-        if (!(r.choice in job.req.options)) {
+        if (!offered(job.req, r.choice)) {
           const e = new ProviderError("invalid_response", `provider returned unoffered label "${r.choice}"`, { requestId: r.requestId });
           recordFailure(p, e);
           job.trace.providerRequestId = r.requestId; job.trace.latencyMs = r.latencyMs; job.trace.attempts = r.attempts;
           return fallback(job, e.kind, e.message);
         }
-        h.failures = 0; h.lastOkAtMs = now(); h.lastErrorType = null;
+        h.failures = 0; h.lastOkAtMs = now(); h.lastErrorType = null; h.lastOutcome = "ok";
         const t = job.trace;
         t.model = r.model ?? job.provider.model; t.providerChoice = r.choice;
+        // The Meta shadow may have answered first: agreement can only be judged once Drex's own label is known.
+        if (t.shadow && t.shadow.chosenAction !== null) t.shadow.agrees = t.shadow.chosenAction === r.choice;
         t.confidence = r.confidence; t.probabilities = r.probabilities;
         t.providerRequestId = r.requestId; t.latencyMs = r.latencyMs; t.providerEvalMs = r.providerEvalMs;
         t.usage = r.usage; t.attempts = r.attempts; t.status = "RESOLVED";
@@ -239,7 +252,9 @@ export function createScheduler(deps: SchedulerDeps): SchedulerPort {
           fallback(job, "timeout", e.message, "TIMEOUT");
         }, d);
         queue.push(job);
-        pump();
+        // Start on a microtask, never inside request(): a circuit-open or budget fallback would otherwise call onDone
+        // before the caller has the trace, and the NPC would stay pending forever.
+        queueMicrotask(pump);
       }
       publish();
       return trace;

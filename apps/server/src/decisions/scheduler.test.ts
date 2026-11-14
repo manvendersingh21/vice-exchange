@@ -146,9 +146,22 @@ describe("scheduler", () => {
     const s = make(fake("drex", () => new Promise<ProviderResult>((r) => { resolve = r; })));
     const done = vi.fn();
     s.request(req(), done);
+    await vi.advanceTimersByTimeAsync(0); // the provider call starts on a microtask, never inside request()
     s.cancelAll();
     resolve(ok());
     await vi.advanceTimersByTimeAsync(RULES.decisions.deadlineMs.drex + 10);
+    expect(done).not.toHaveBeenCalled();
+    expect(s.pending()).toBe(0);
+  });
+
+  it("cancelAll before the call has started never reaches the provider", async () => {
+    const d = fake("drex", async () => ok());
+    const s = make(d);
+    const done = vi.fn();
+    s.request(req(), done);
+    s.cancelAll();
+    await vi.advanceTimersByTimeAsync(RULES.decisions.deadlineMs.drex + 10);
+    expect(d.calls).toBe(0);
     expect(done).not.toHaveBeenCalled();
     expect(s.pending()).toBe(0);
   });
@@ -223,5 +236,88 @@ describe("providers (injected fetch, no network)", () => {
   it("meta times out at timeoutMs", async () => {
     const slow = ((_: unknown, init: RequestInit) => new Promise((_, rej) => init.signal!.addEventListener("abort", () => rej(new Error("aborted"))))) as never;
     await expect(createMetaProvider({ apiKey: "k", fetch: slow }).decide(call, { timeoutMs: 30 })).rejects.toMatchObject({ kind: "timeout" });
+  });
+});
+
+// Audit regressions (2026-11-14): the scheduler must never finish a decision inside request(), must restart its
+// queue whenever a slot frees up, must not claim LIVE for decisions the provider did not make, and must judge
+// shadow agreement whichever model answers first.
+describe("scheduler audit regressions", () => {
+  const hung: DecisionProvider["decide"] = (_c, o) => new Promise((_res, rej) => {
+    o.signal?.addEventListener("abort", () => rej(new ProviderError("aborted", "aborted by deadline")));
+  });
+
+  it("never calls onDone inside request() when the budget is spent", async () => {
+    const s = make(fake("drex", async () => ok()), { maxCallsPerMinute: 1 });
+    await run(s, req());
+    let returned = false, calledInside = false, final: DecisionTrace | undefined;
+    const trace = s.request(req(), (t) => { calledInside = !returned; final = t; });
+    returned = true;
+    expect(trace?.status).toBe("REQUESTED");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calledInside).toBe(false);
+    expect(final).toMatchObject({ decisionSource: "fallback", errorType: "budget_exceeded", chosenAction: "ignore", confidence: null });
+  });
+
+  it("never calls onDone inside request() while the circuit breaker is open", async () => {
+    const s = make(fake("drex", async () => { throw new ProviderError("auth", "bad key", { status: 401 }); }));
+    await run(s, req());
+    let returned = false, calledInside = false, final: DecisionTrace | undefined;
+    const trace = s.request(req(), (t) => { calledInside = !returned; final = t; });
+    returned = true;
+    expect(trace?.status).toBe("REQUESTED");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calledInside).toBe(false);
+    expect(final).toMatchObject({ decisionSource: "fallback", errorType: "circuit_open" });
+  });
+
+  it("a slot freed by a timed-out call restarts the queue", async () => {
+    let first = true;
+    const d = fake("drex", (c, o) => { if (first) { first = false; return hung(c, o); } return Promise.resolve(ok()); });
+    const s = make(d, { concurrency: 1 });
+    const out: DecisionTrace[] = [];
+    s.request(req(), (t) => out.push(t));
+    await vi.advanceTimersByTimeAsync(RULES.decisions.deadlineMs.drex - 1000);
+    s.request(req(), (t) => out.push(t)); // queued behind the hung call, with 3 s of its own deadline left
+    await vi.advanceTimersByTimeAsync(1200); // the first call hits its deadline and is aborted
+    expect(out.map((t) => t.decisionSource)).toEqual(["fallback", "drex"]);
+    expect(d.calls).toBe(2);
+  });
+
+  it("the badge is PENDING before the first answer, LIVE after a real answer, FALLBACK after a budget fallback", async () => {
+    const s = make(fake("drex", async () => ok()), { maxCallsPerMinute: 1 });
+    expect(s.status().badge).toBe("DREX: PENDING");
+    await run(s, req());
+    expect(s.status().badge).toBe("DREX: LIVE");
+    await run(s, req());
+    expect(s.status().badge).toBe("DREX: FALLBACK");
+  });
+
+  it("a wrong key never shows LIVE", async () => {
+    const s = make(fake("drex", async () => { throw new ProviderError("auth", "bad key", { status: 401 }); }));
+    await run(s, req());
+    expect(s.status().badge).toBe("DREX: FALLBACK");
+  });
+
+  it("shadow agreement is judged even when Meta answers before Drex", async () => {
+    const drex = fake("drex", () => new Promise<ProviderResult>((res) => setTimeout(() => res(ok("gossip")), 100)));
+    const meta = fake("meta", async () => ({ ...ok("gossip", null), provider: "meta" as const }));
+    const s = createScheduler({ drex, meta, clock, mode: "drex", concurrency: 4, maxCallsPerMinute: 100, shadowMeta: true } as never);
+    const t = await run(s, req(), 200);
+    expect(t.shadow).toMatchObject({ provider: "meta", chosenAction: "gossip", agrees: true });
+  });
+
+  it("a failing Meta shadow shows in Meta's health and opens its breaker instead of being called forever", async () => {
+    const meta = fake("meta", async () => { throw new ProviderError("auth", "bad meta key", { status: 401 }); });
+    const s = createScheduler({ drex: fake("drex", async () => ok()), meta, clock, mode: "drex", concurrency: 4, maxCallsPerMinute: 100, shadowMeta: true } as never);
+    for (let i = 0; i < 4; i++) await run(s, req(), 10);
+    expect(meta.calls).toBe(1);
+    expect(s.status().meta.state).toBe("DOWN");
+    expect(s.status().badge).toBe("DREX: LIVE");
+  });
+
+  it("an inherited object key is never accepted as an offered label", async () => {
+    const t = await run(make(fake("drex", async () => ok("constructor"))), req());
+    expect(t).toMatchObject({ decisionSource: "fallback", errorType: "invalid_response", chosenAction: "ignore", providerChoice: null });
   });
 });

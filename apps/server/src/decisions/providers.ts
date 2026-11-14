@@ -68,7 +68,7 @@ export function createDrexProvider(cfg: DrexProviderConfig): DecisionProvider {
         const latencyMs = Math.round(performance.now() - started);
         const answer = result.answers.next_action;
         const requestId = result.request_id ?? null;
-        if (!answer || typeof answer.choice !== "string" || !(answer.choice in call.options)) {
+        if (!answer || typeof answer.choice !== "string" || !Object.hasOwn(call.options, answer.choice)) {
           throw new ProviderError("invalid_response", `Drex returned a label that was not offered: ${String(answer?.choice)}`, { retryable: false, requestId });
         }
         return {
@@ -181,7 +181,7 @@ export function createMetaProvider(cfg: MetaProviderConfig): DecisionProvider {
         }
         let label: unknown;
         try { label = JSON.parse(content).choice; } catch { label = undefined; }
-        if (typeof label !== "string" || !(label in call.options)) {
+        if (typeof label !== "string" || !Object.hasOwn(call.options, label)) {
           throw new ProviderError("invalid_response", "Meta returned a label that was not offered", { retryable: false, requestId });
         }
         return {
