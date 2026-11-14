@@ -3,6 +3,7 @@ import { RULES, dist } from "@vice/contracts";
 import type { DecisionTrace, EntityId, GameEvent, MemoryEntry, Vec2 } from "@vice/contracts";
 import type { BrainsPort, DecisionRequest, MemoryPort, NpcState, PolicyPort, SchedulerPort, WorldPort } from "../domain";
 import { buildPlan, freshSighting } from "./roles";
+import type { InformantLedger } from "./roles";
 
 export interface BrainsDeps {
   world: WorldPort; memory: MemoryPort; scheduler: SchedulerPort;
@@ -26,6 +27,7 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
   const seen = new Set<string>();
   const tracesByNpc = new Map<EntityId, DecisionTrace[]>();
   const allTraces: DecisionTrace[] = [];
+  const ledgers = new Map<EntityId, InformantLedger>();  // informant side deals: earnings and last side taken
   let collecting: string[] | null = null;              // effect event ids while an action is being applied
 
   function publish(t: DecisionTrace) {
@@ -53,7 +55,7 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
   function think(npc: NpcState, mem: MemoryEntry, t: Trigger) {
     const nowMs = world.now();
     const memories = memory.recall(npc.id, nowMs);     // this NPC's memory only
-    const plan = buildPlan(world, npc, memories, mem, policy);
+    const plan = buildPlan(world, npc, memories, mem, policy, ledgers.get(npc.id));
     if (!plan) return;
     const req: DecisionRequest = {
       decisionId: world.nextId("dec"), roomId: world.state.id, runId: world.state.runId,
@@ -92,6 +94,10 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
       if (action === "sell" && shares <= 0) return "no shares left to sell";
     }
     if (npc.role === "POLICE" && action === "pursue" && !freshSighting(memory.recall(npc.id, world.now()), subjectId, world.now())) return "no fresh sighting of the suspect any more";
+    if (npc.role === "INFORMANT" && (action === "sell_to_crew" || action === "warn_outlaw")) {
+      if (!(world.hunterCrews?.() ?? []).length) return "no hunter crew any more";
+      if (!subject || subject.status !== "WANTED") return "the outlaw is no longer wanted";
+    }
     if (npc.role === "WITNESS" && action === "gossip" && !npc.contacts.some((id) => world.state.npcs[id])) return "no informant contact";
     return null;
   }
@@ -120,6 +126,27 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
         const to = npc.contacts.map((id) => world.state.npcs[id]).filter((n): n is NpcState => !!n);
         to.forEach((n) => msg(n.id, "RELAY"));
         return `relayed the tip about ${about} to ${to.map((n) => n.name).join(", ") || "nobody"}`;
+      }
+      case "INFORMANT:sell_to_crew": case "INFORMANT:warn_outlaw": {
+        const side = action === "sell_to_crew" ? "crew" as const : "outlaw" as const;
+        const led = ledgers.get(npc.id) ?? { earnings: 0, lastSide: null };
+        const target = world.state.characters[subject ?? ""];
+        const crews = world.hunterCrews?.() ?? [];
+        if (!target || crews.length === 0) return "no deal: nobody to sell to";
+        const fee = RULES.crew.tipFee;
+        const from = led.lastSide;
+        const switched = from !== null && from !== side;
+        led.earnings += fee; led.lastSide = side; ledgers.set(npc.id, led);
+        if (side === "crew") {
+          const at = pos(m, target);
+          // Sold to the largest crew (first formed on a tie).
+          const crew = [...crews].sort((a, b) => b.memberPlayerIds.length - a.memberPlayerIds.length || (a.id < b.id ? -1 : 1))[0]!;
+          world.emit("CREW_TIP", npc.id, { crewId: crew.id, crewName: crew.name, memberPlayerIds: crew.memberPlayerIds, informantId: npc.id, informantName: npc.name, characterId: target.id, ticker: target.ticker, x: at.x, z: at.z, fee, earnings: led.earnings }, opts);
+        } else {
+          world.emit("OUTLAW_WARNED", npc.id, { characterId: target.id, playerId: target.playerId, ticker: target.ticker, crewNames: crews.map((k) => k.name), informantId: npc.id, informantName: npc.name, fee, earnings: led.earnings }, opts);
+        }
+        if (switched && from) world.emit("INFORMANT_SWITCHED_SIDES", npc.id, { informantId: npc.id, informantName: npc.name, from, to: side, characterId: target.id }, opts);
+        return side === "crew" ? `sold the last known location of ${about} to a hunter crew for V$${fee}${switched ? " (switched sides)" : ""}` : `sold ${about} a warning about the hunter crew for V$${fee}${switched ? " (switched sides)" : ""}`;
       }
       case "TRADER:buy": case "TRADER:sell": {
         const ticker = m.subjectTicker ?? (subject ? world.state.characters[subject]?.ticker : null) ?? "";
@@ -256,7 +283,7 @@ export function createBrains(deps: BrainsDeps): BrainsPort {
     },
     traces: () => [...allTraces],
     reset() {
-      pending.clear(); deferred.clear(); cooldownUntil.clear(); seen.clear(); tracesByNpc.clear(); allTraces.length = 0; collecting = null;
+      pending.clear(); deferred.clear(); cooldownUntil.clear(); seen.clear(); tracesByNpc.clear(); allTraces.length = 0; collecting = null; ledgers.clear();
     },
   };
 }

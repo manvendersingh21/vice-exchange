@@ -41,7 +41,10 @@ function describeMemory(world: WorldPort, npc: NpcState, m: MemoryEntry, nowMs: 
   };
 }
 
-export function buildPlan(world: WorldPort, npc: NpcState, memories: MemoryEntry[], trigger: MemoryEntry, policy?: PolicyPort): RolePlan | null {
+/** What an informant has earned by selling information, and whose side its last sale took. Kept by the brains. */
+export interface InformantLedger { earnings: number; lastSide: "crew" | "outlaw" | null }
+
+export function buildPlan(world: WorldPort, npc: NpcState, memories: MemoryEntry[], trigger: MemoryEntry, policy?: PolicyPort, ledger?: InformantLedger): RolePlan | null {
   const nowMs = world.now();
   const subjectId = trigger.subjectCharacterId;
   const ticker = trigger.subjectTicker ?? (subjectId ? world.state.characters[subjectId]?.ticker ?? null : null);
@@ -66,9 +69,25 @@ export function buildPlan(world: WorldPort, npc: NpcState, memories: MemoryEntry
   }
   if (npc.role === "INFORMANT") {
     if (npc.contacts.length === 0) return null;
-    return { question: `As this informant, do you pass what you know about ${about} on to your trader contacts?`,
-      options: { relay: "Pass the tip to my trader contacts now", withhold: "Keep it to myself; it is too weak or too risky to pass on" },
-      scriptedAction: "relay", safeAction: "withhold", state: base, citations };
+    const options: Record<string, string> = { relay: "Pass the tip to my trader contacts now", withhold: "Keep it to myself; it is too weak or too risky to pass on" };
+    // Side deals exist only while a hunter crew is in town and the subject is a wanted outlaw. Each is for my own gain.
+    const crews = world.hunterCrews?.() ?? [];
+    const subject = subjectId ? world.state.characters[subjectId] : undefined;
+    if (crews.length === 0 || !subject || subject.role !== "OUTLAW" || subject.status !== "WANTED") {
+      return { question: `As this informant, do you pass what you know about ${about} on to your trader contacts?`,
+        options, scriptedAction: "relay", safeAction: "withhold", state: base, citations };
+    }
+    const hasLocation = Number.isFinite(Number(trigger.payload.x)) && Number.isFinite(Number(trigger.payload.z));
+    if (hasLocation) options.sell_to_crew = `Sell the last known location of ${about} to the hunter crew for a V$${RULES.crew.tipFee} fee: I gain if they catch the outlaw`;
+    options.warn_outlaw = `Sell ${about} a warning that a hunter crew is after them for a V$${RULES.crew.tipFee} fee: I gain if the outlaw stays free and keeps paying`;
+    const state: Record<string, unknown> = {
+      ...base,
+      hunter_crews_in_town: crews.map((k) => ({ name: k.name, hunters: k.memberPlayerIds.length })),
+      my_earnings_from_deals: ledger?.earnings ?? 0,
+      my_last_deal: ledger?.lastSide === "crew" ? "sold a location to the hunter crew" : ledger?.lastSide === "outlaw" ? "sold a warning to the outlaw" : "none yet",
+    };
+    return { question: `As this informant, what do you do with what you know about ${about}? You may pass it to your trader contacts, keep it, or sell it to one side for your own gain.`,
+      options, scriptedAction: "relay", safeAction: "withhold", state, citations };
   }
   if (npc.role === "TRADER") {
     if (!ticker || !wallet) return null;

@@ -15,17 +15,17 @@ type JoinCmd = Extract<ClientCommand, { type: "room.create" | "room.join" }>;
 export class RoomManager {
   readonly rooms = new Map<string, Room>();
   private n = 0;
-  constructor(private build: (o: RoomBuildOpts) => BuiltRoom, private opts: { directorSecret: string; defaultMode: DecisionMode; tickHz: number }) {}
+  constructor(private build: (o: RoomBuildOpts) => BuiltRoom, private opts: { directorSecret: string; defaultMode: DecisionMode; tickHz: number; fugitive?: boolean }) {}
   onTick?: (room: Room) => void;
 
   create(code: string, seed: number, mode: DecisionMode = this.opts.defaultMode): Room {
     // roomId is unique per room instance (and so per server boot); the short code is what people type.
     // Stored history is keyed by roomId, so a restarted server never collides with an earlier VICE-42.
     const roomId = `${code}@${Date.now().toString(36)}${randomBytes(2).toString("hex")}`;
-    const built = this.build({ roomId, code, seed, mode });
+    const built = this.build({ roomId, code, seed, mode, fugitive: !!this.opts.fugitive });
     const room: Room = { ...built, code, timer: null, hasDirector: false, emptySinceMs: null };
     room.timer = setInterval(() => {
-      try { room.engine.tick(); this.onTick?.(room); } catch (err) { console.error("[room] tick failed", code, err); }
+      try { room.fugitive?.step(); room.engine.tick(); this.onTick?.(room); } catch (err) { console.error("[room] tick failed", code, err); }
       if (room.engine.state.tick % 50 === 0) this.sweep();
     }, Math.round(1000 / this.opts.tickHz));
     this.rooms.set(code, room);

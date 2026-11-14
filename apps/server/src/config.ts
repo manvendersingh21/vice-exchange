@@ -53,6 +53,8 @@ export interface Config {
   metaModel: string;
   /** SHADOW_META: in drex mode also ask Meta in the background (never applied) for a live side-by-side. Default on; only acts when both keys exist. */
   shadowMeta: boolean;
+  /** The autonomous hunted outlaw in live rooms. FUGITIVE=0 turns it off. */
+  fugitive: boolean;
 }
 
 export const config: Config = {
@@ -70,6 +72,7 @@ export const config: Config = {
   metaBaseUrl: str("META_BASE_URL", "https://api.meta.ai/v1"),
   metaModel: str("META_DECISION_MODEL") || str("META_MODEL", "muse-ember-1.0"),
   shadowMeta: !/^(0|false|off|no)$/i.test(str("SHADOW_META", "on")),
+  fugitive: !/^(0|false|off|no)$/i.test(str("FUGITIVE", "on")),
 };
 
 /** Safe-to-log / safe-to-serve view of the config: booleans only, never key material. */

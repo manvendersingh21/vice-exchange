@@ -16,6 +16,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { clientCommandSchema } from "@vice/contracts";
 import type { CommandAck, GameEvent, JoinResult, RoomSnapshot, WalletView } from "@vice/contracts";
 import type { Room, RoomManager } from "../rooms/RoomManager";
+import { createUdpChannel, type UdpStats } from "./udp";
 
 export const BRIDGE_PATH = "/bridge";
 const TICK_MS = 100;
@@ -47,6 +48,8 @@ interface Session {
 export interface WorldBridge {
   /** Number of connected bridge clients (for /health and the dashboard). */
   clients(): number;
+  /** UDP fast path counters (see ./udp.ts). */
+  udp(): UdpStats;
   close(): void;
 }
 
@@ -108,6 +111,32 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
     }
     s.roomCode = null; s.playerId = null; s.sessionToken = null;
   };
+
+  // UDP fast path (./udp.ts): poses in, 30 Hz world state out. Everything reliable stays on this WebSocket.
+  const sessionById = (key: number): Session | undefined => { for (const x of sessions.values()) if (x.id === key) return x; return undefined; };
+  const udp = createUdpChannel({
+    disabled: process.env.VICE_UDP === "0",
+    port: () => {
+      const env = process.env.UDP_PORT;
+      if (env !== undefined && env !== "" && Number.isInteger(Number(env)) && Number(env) >= 0) return Number(env);
+      const a = httpServer.address();
+      return a && typeof a === "object" ? a.port + 1 : 3002; // default: HTTP port + 1 (3001 -> 3002)
+    },
+    // Same door as a WebSocket pose: schema first, then the engine's own bounds and speed checks.
+    pose: (key, x, z) => {
+      const s = sessionById(key); const room = s ? roomOf(s) : undefined; const p = s && room ? playerOf(s, room) : undefined;
+      if (!room || !p) return false;
+      const cmd = clientCommandSchema.safeParse({ type: "player.pose", x, z });
+      return cmd.success && room.engine.dispatch(p.id, cmd.data, { external: true }).ok;
+    },
+    view: (key) => {
+      const s = sessionById(key); const room = s ? roomOf(s) : undefined;
+      if (!s || !room) return null;
+      return { tick: room.engine.worldTick(), characterId: playerOf(s, room)?.characterId ?? null };
+    },
+  });
+  /** Offer the UDP channel to a native client that just joined (the browser-embedded companion has no UDP). */
+  const offerUdp = (s: Session): void => { void udp.register(s.id).then((m) => { if (m) send(s, m); }).catch(() => { /* stays on WebSocket */ }); };
 
   function onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let pathname = "";
@@ -174,6 +203,7 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
           const { snapshot: _omit, ...slim } = full as JoinResult;
           reply({ ok: true, id: r.id, result: slim });
           sendState(s);
+          offerUdp(s);
           return;
         }
         const room = roomOf(s);
@@ -186,7 +216,7 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
         reply({ ok: false, id, error: { code: "INTERNAL", message: "Server error" } });
       }
     });
-    ws.on("close", () => { leave(s); sessions.delete(ws); });
+    ws.on("close", () => { udp.unregister(s.id); leave(s); sessions.delete(ws); });
     ws.on("error", () => { /* close follows */ });
   });
 
@@ -203,8 +233,10 @@ export function attachWorldBridge(httpServer: HttpServer, rooms: RoomManager): W
 
   return {
     clients: () => sessions.size,
+    udp: () => udp.stats(),
     close: () => {
       clearInterval(timer);
+      udp.close();
       httpServer.off("upgrade", onUpgrade);
       for (const s of sessions.values()) { send(s, { t: "bye", reason: "server closing" }); leave(s); try { s.ws.close(); } catch { /* already closed */ } }
       sessions.clear(); wss.close();

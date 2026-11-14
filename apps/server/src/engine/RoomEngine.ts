@@ -628,6 +628,28 @@ export class RoomEngine implements WorldPort {
   }
 
   // ---------- hunter crews ----------
+  hunterCrews(): Array<{ id: string; name: string; memberPlayerIds: EntityId[] }> { return [...this.crews.values()].map((k) => ({ id: k.id, name: k.name, memberPlayerIds: [...k.memberPlayerIds] })); }
+  /** A crew forming or growing while an outlaw is wanted is public market news: each trader hears it and decides for itself. */
+  private crewMarketNote(crew: CrewView, cause: GameEvent): void {
+    const s = this.state; const now = this.now();
+    for (const c of Object.values(s.characters)) {
+      if (c.role !== "OUTLAW" || c.status !== "WANTED" || !c.ticker) continue;
+      const n = crew.memberPlayerIds.length;
+      const summary = `Hunter crew ${crew.name} (${n} hunter${n === 1 ? "" : "s"}) is now after ${c.ticker}: a capture would send it to zero.`;
+      const o = { causationId: cause.eventId, correlationId: this.storyOf.get(c.id) ?? cause.correlationId };
+      for (const t of Object.values(s.npcs)) {
+        if (t.role !== "TRADER") continue;
+        const memId = this.nextId("mem");
+        this.emitWith("NPC_OBSERVED", t.id, { npcId: t.id, memoryId: memId, factType: "RUMOR", subjectCharacterId: c.id, distance: 0, incidentId: null, summary }, o, (e) => {
+          this.deps.memory.remember({
+            agentId: t.id, factType: "RUMOR", subjectCharacterId: c.id, subjectTicker: c.ticker, eventId: e.eventId, sourceActorId: "public", sourceKind: "BULLETIN", sourceMemoryId: null, hop: 1,
+            observedAtMs: now, expiresAtMs: now + RULES.memory.ttlMs.RUMOR, confidence: RULES.memory.confidence.BULLETIN, summary, payload: { ticker: c.ticker, crew: crew.name, hunters: n }, citation: null,
+          }, memId);
+        });
+        this.dirty.agents.add(t.id);
+      }
+    }
+  }
   private joinCrew(player: PlayerState, rawName: string): { ok: true; crew: CrewView } | { ok: false; reason: string; message: string } {
     const name = rawName.trim().toUpperCase();
     let crew = [...this.crews.values()].find((k) => k.name === name);
@@ -638,8 +660,9 @@ export class RoomEngine implements WorldPort {
     if (!crew) { crew = { id: this.nextId("crew"), name, memberPlayerIds: [], formedAtMs: this.now() }; this.crews.set(crew.id, crew); }
     crew.memberPlayerIds.push(player.id);
     this.crewOf.set(player.id, crew.id);
-    this.emit("CREW_JOINED", player.id, { crewId: crew.id, crewName: crew.name, playerId: player.id, nickname: player.nickname, created, memberPlayerIds: [...crew.memberPlayerIds] });
+    const joined = this.emit("CREW_JOINED", player.id, { crewId: crew.id, crewName: crew.name, playerId: player.id, nickname: player.nickname, created, memberPlayerIds: [...crew.memberPlayerIds] });
     this.touchCrew(crew, player.id);
+    this.crewMarketNote(crew, joined);
     return { ok: true, crew };
   }
   private leaveCrew(playerId: string, reason: "LEFT" | "SWITCHED" | "EJECTED", opts: EmitOpts = {}): CrewView | null {
@@ -741,7 +764,7 @@ export class RoomEngine implements WorldPort {
     // An outlaw firing in the street is something the city can see: heat, and an incident nearby NPCs may witness.
     if (c.role === "OUTLAW") {
       this.addHeat(c, W.heatPerShot, "fired a stun pulse", opts);
-      this.incident("SIGHTING", c, `${c.nickname} fired a stun pulse${hit ? ` at ${hit.name}` : ""}.`, opts);
+      this.incident("SIGHTING", c, `Shots fired: ${c.nickname}${c.ticker ? ` (${c.ticker})` : ""} fired a stun pulse${hit ? ` at ${hit.name}` : ""}.`, opts);
     }
     return ack(id, { hitId: hit?.id ?? null, ammoLeft: ammo - 1, readyAtMs: now + W.cooldownMs });
   }
@@ -938,6 +961,8 @@ export class RoomEngine implements WorldPort {
     t.shadow = update.shadow;
     this.onTrace(t);
   }
+  /** Decisions made by agents that are not NPCs (the fugitive) are persisted and counted like any other. */
+  recordAgentTrace(t: DecisionTrace): void { this.onTrace(t); }
   private onTrace(t: DecisionTrace): void {
     try { this.deps.persistence.saveDecision(t); } catch (err) { console.error("[persistence] saveDecision failed", (err as Error).message); }
     try { this.deps.metrics.onDecision(t); } catch (err) { console.error("[metrics] onDecision failed", (err as Error).message); }

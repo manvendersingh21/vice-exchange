@@ -107,6 +107,8 @@ export interface DecisionTrace {
   effectEventIds: string[];
   requestedAtMs: number; resolvedAtMs: number | null; requestedAtSequence: number;
   citations: Citation[];
+  /** Set when the decider is not one of the four NPC roles (the autonomous hunted outlaw). */
+  agentKind?: "FUGITIVE";
   shadow: ShadowResult | null;
 }
 

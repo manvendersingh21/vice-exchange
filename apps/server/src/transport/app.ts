@@ -20,6 +20,8 @@ export interface AppOptions {
   /** Live room mode at boot. Defaults to drex when a Nace key is configured, otherwise scripted. */
   defaultMode?: DecisionMode;
   webOrigin?: string;
+  /** Put the autonomous hunted outlaw in every live room. Default false. */
+  fugitive?: boolean;
   /** Mount the plain-WebSocket world bridge (external 3D clients) at /bridge. Default true. */
   bridge?: boolean;
   /**
@@ -55,7 +57,7 @@ export function createApp(o: AppOptions): App {
     onRunExperiment: (engine, durationSec) => runner?.start(engine.state.seed, durationSec) ?? null,
   });
   // The live room starts on Drex when a key is configured; otherwise it is honestly scripted.
-  const rooms = new RoomManager(build, { directorSecret: o.directorSecret, defaultMode: o.defaultMode ?? (o.providers.naceApiKey ? "drex" : "scripted"), tickHz: o.tickHz });
+  const rooms = new RoomManager(build, { directorSecret: o.directorSecret, defaultMode: o.defaultMode ?? (o.providers.naceApiKey ? "drex" : "scripted"), tickHz: o.tickHz, fugitive: !!o.fugitive });
 
   const app = express();
   app.disable("x-powered-by");
@@ -70,7 +72,7 @@ export function createApp(o: AppOptions): App {
   runner = exp;
   transport.wire(rooms.ensureDefault());
 
-  let bridge: { clients(): number; close(): void } | null = null;
+  let bridge: { clients(): number; close(): void; udp?(): { enabled: boolean; port: number | null; clients: number } } | null = null;
   if (o.bridge !== false) {
     // Optional module owned by the 3D-world team; the server must boot even if it fails to load.
     import("../bridge/index").then((m) => { bridge = m.attachWorldBridge(httpServer, rooms); })
@@ -85,7 +87,7 @@ export function createApp(o: AppOptions): App {
       rooms: rooms.rooms.size, defaultRoom: DEFAULT_ROOM_CODE, mode: r?.engine.state.mode ?? null, badge: r?.scheduler.status().badge ?? null,
       shadowMeta: !!o.providers.shadowMeta && o.providers.naceApiKey.length > 0 && o.providers.metaApiKey.length > 0,
       policyLoaded: !!o.policy?.view(),
-      bridgeClients: bridge?.clients() ?? 0, credits: CREDITS_NOTICE,
+      bridgeClients: bridge?.clients() ?? 0, udp: (() => { const u = bridge?.udp?.(); return u ? { enabled: u.enabled, port: u.port, clients: u.clients } : null; })(), credits: CREDITS_NOTICE,
     });
   });
   app.get("/api/rooms/:code/snapshot", (req, res) => { const r = room(req.params.code); return r ? res.json(r.engine.snapshot()) : res.status(404).json({ error: "ROOM_NOT_FOUND" }); });

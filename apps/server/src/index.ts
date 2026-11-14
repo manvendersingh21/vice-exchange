@@ -18,7 +18,7 @@ try {
 }
 
 const app = createApp({
-  policy,
+  policy, fugitive: config.fugitive,
   port: config.port, databaseUrl: config.databaseUrl, directorSecret, tickHz: config.tickHz, webOrigin: config.webOrigin,
   providers: {
     naceApiKey: config.naceApiKey, naceModel: config.naceModel, metaApiKey: config.metaApiKey, metaBaseUrl: config.metaBaseUrl, metaModel: config.metaModel,

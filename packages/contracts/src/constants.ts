@@ -50,9 +50,11 @@ export const RULES = {
   bounty: { fractionOfReference: 0.5, min: 50 },
   // Stun pulse: no damage, nobody dies. A hit freezes a human character or a police NPC for stunMs.
   // An outlaw's shot adds heat and is an incident nearby NPCs can witness.
+  // The hunted agent: an autonomous outlaw that decides with the room's decision engine. Humans join the hunt around it.
+  fugitive: { enabled: true, thinkEveryMs: 6000, respawnDelayMs: 12000 },
   weapon: { rangeM: 16, cooldownMs: 2500, stunMs: 3000, heatPerShot: 8, ammo: 6, coneDeg: 25 },
   // Hunter crews: crewmates near the capture split the bounty equally; stunning a crewmate shortly before capturing is a double-cross.
-  crew: { maxMembers: 4, assistRadiusM: 25, betrayalWindowMs: 12000 },
+  crew: { maxMembers: 4, assistRadiusM: 25, betrayalWindowMs: 12000, tipFee: 40 },
   memory: {
     maxEntriesPerNpc: 30,
     ttlMs: { SIGHTING: 60000, INCIDENT: 180000, RUMOR: 120000, WANTED_BULLETIN: 180000, LISTING: 600000, POLICY: 86400000 },

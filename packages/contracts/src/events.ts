@@ -46,6 +46,11 @@ export interface EventPayloads {
   };
   CREW_JOINED: { crewId: string; crewName: string; playerId: EntityId; nickname: string; created: boolean; memberPlayerIds: EntityId[] };
   CREW_LEFT: { crewId: string; crewName: string; playerId: EntityId; nickname: string; reason: "LEFT" | "SWITCHED" | "EJECTED"; memberPlayerIds: EntityId[] };
+  /** An informant sold a wanted outlaw's last known location to a hunter crew (its own decision). */
+  CREW_TIP: { crewId: string; crewName: string; memberPlayerIds: EntityId[]; informantId: EntityId; informantName: string; characterId: EntityId; ticker: string | null; x: number; z: number; fee: number; earnings: number };
+  /** An informant sold the outlaw a warning about the crew instead. */
+  OUTLAW_WARNED: { characterId: EntityId; playerId: EntityId; ticker: string | null; crewNames: string[]; informantId: EntityId; informantName: string; fee: number; earnings: number };
+  INFORMANT_SWITCHED_SIDES: { informantId: EntityId; informantName: string; from: "crew" | "outlaw"; to: "crew" | "outlaw"; characterId: EntityId | null };
   CREW_BETRAYED: { crewId: string; crewName: string; betrayerPlayerId: EntityId; betrayerName: string; victimPlayerIds: EntityId[]; victimNames: string[]; bounty: number };
   /** A stun pulse was fired. Nobody is hurt: a hit only stuns. hitId is null on a miss. */
   WEAPON_FIRED: { shooterId: EntityId; shooterName: string; shooterKind: ActorKind; x: number; z: number; toX: number; toZ: number; hitId: EntityId | null; hitKind: "CHARACTER" | "NPC" | null; ammoLeft: number };
@@ -63,7 +68,7 @@ export const EVENT_TYPES = [
   "LISTING_OPENED", "MISSION_SPAWNED", "MISSION_COMPLETED", "INCIDENT_OCCURRED", "NPC_OBSERVED",
   "AGENT_MESSAGE_SENT", "AGENT_MESSAGE_DELIVERED", "BULLETIN_PUBLISHED", "DECISION_REQUESTED", "DECISION_RESOLVED",
   "AGENT_ACTION_APPLIED", "AGENT_ACTION_REJECTED", "MARKET_PRICE_UPDATED", "TRADE_EXECUTED", "TRADE_REJECTED",
-  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "WEAPON_FIRED", "STUNNED", "CREW_JOINED", "CREW_LEFT", "CREW_BETRAYED", "LISTING_HALTED",
+  "WANTED_STATUS_CHANGED", "ESCAPE_SUCCEEDED", "CAPTURE_SUCCEEDED", "CAPTURE_REJECTED", "WEAPON_FIRED", "STUNNED", "CREW_JOINED", "CREW_LEFT", "CREW_BETRAYED", "CREW_TIP", "OUTLAW_WARNED", "INFORMANT_SWITCHED_SIDES", "LISTING_HALTED",
   "CHARACTER_ARCHIVED", "CHARACTER_RESPAWNED", "POLICY_INGESTED",
 ] as const satisfies readonly EventType[];
 

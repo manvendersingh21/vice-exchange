@@ -97,6 +97,8 @@ var ws_open := false
 var joined := false
 var session_token := ""
 var _web_tuned := false
+var udp_on := true               # --vice-no-udp: stay on the WebSocket for poses and ticks
+var _udp = null                  # vice_udp.gd helper (UDP fast path), created when the server offers it
 var web_embed := false         # true when running as the Web export inside the browser UI
 var my_player_id := ""
 var my_character_id := ""
@@ -134,6 +136,23 @@ var _wanted_shot := false
 var _capture_shot := false
 var _capture_at := 0.0
 var _last_capture_try := 0.0
+
+# --- guns, cars, helicopter (VICE mode) ---
+var guns := true                # --vice-no-guns
+var heli_on := true             # --vice-no-heli
+var demo := ""                  # --vice-demo=gun|victim|car|watch|heli : scripted verification runs
+var _demo_stage := ""
+var _demo_t := 0.0
+var _demo_p0 := Vector2.ZERO
+var _last_fire := -10.0
+var my_ammo := -1
+var _my_stun_until := 0.0
+var _stun_pos := Vector3.ZERO
+var _stun_until: Dictionary = {}    # entity id -> local time the knock-down ends
+var _tracers: Array = []
+var _stuns_seen := 0
+var _shots_seen := 0
+var _heli = null
 
 var entities: Dictionary = {}   # id -> { node, label, ring, pos, target, yaw, phase, kind, base, extra }
 var beacons: Dictionary = {}    # mission id -> Node3D
@@ -187,6 +206,11 @@ func _ready() -> void:
 		elif arg == "--vice-hunt": hunt = true
 		elif arg == "--vice-keep-hud": keep_city_hud = true
 		elif arg == "--vice-no-ambient": ambient = false
+		elif arg == "--vice-no-guns": guns = false
+		elif arg == "--vice-no-udp": udp_on = false
+		elif arg == "--vice-no-heli": heli_on = false
+		elif arg.begins_with("--vice-demo="):
+			demo = arg.trim_prefix("--vice-demo="); active = true; windowed = true
 		elif arg == "--vice-fx": fx_shots = true
 		elif arg.begins_with("--vice-look="): look = arg.trim_prefix("--vice-look=")
 		elif arg.begins_with("--vice-record="):
@@ -205,6 +229,7 @@ func _ready() -> void:
 	if web_embed:
 		get_tree().root.scaling_3d_scale = 0.6  # WebGL 2 / Compatibility renderer: render 3D at 60% and upscale
 		get_tree().root.msaa_3d = Viewport.MSAA_DISABLED
+	process_priority = 50   # run after the city's own _process so a knock-down can hold the player still
 	_build_hud()
 	_check_started_at = _now()
 	print("[vice] bridge active url=%s room=%s name=%s role=%s" % [url, room_code, nickname, role])
@@ -279,7 +304,7 @@ func _process(dt: float) -> void:
 		var scene := get_tree().current_scene
 		if scene != null and "player_pos" in scene and "world" in scene and scene.world != null:
 			game = scene
-			if not check_mode or shots_dir != "" or record_dir != "": _start_game()
+			if not check_mode or shots_dir != "" or record_dir != "" or demo != "": _start_game()
 		else:
 			return
 	if _win_fix > 0:
@@ -296,6 +321,10 @@ func _process(dt: float) -> void:
 		if time_hours >= 0.0: GameState.time_min = time_hours * 60.0
 		GameState.wanted = 0.0          # the only law in this city is the swarm's police
 	_pump_socket(dt)
+	if _udp != null:
+		if not ws_open: _udp.stop()
+		var udp_tick: Dictionary = _udp.poll(_now())
+		if not udp_tick.is_empty(): _on_tick(udp_tick)
 	_poll_keys()
 	if joined and have_state:
 		if need_teleport: _teleport_to_server_position()
@@ -303,10 +332,12 @@ func _process(dt: float) -> void:
 		_update_entities(dt)
 		_declutter_labels()
 		_update_fx(dt)
+		_update_weapons(dt)
 		_update_prompts()
 	_update_hud()
 	_record_frame()
-	if check_mode: _run_check()
+	if demo != "": _run_demo(dt)
+	elif check_mode: _run_check()
 	elif shots_dir != "" and joined and have_state and not _shots_started and entities.size() >= 8:
 		_shots_started = true
 		_run_shots()
@@ -324,10 +355,11 @@ func _start_game() -> void:
 		game.suit_armed = false
 		game.suit_node.visible = false
 		game.suit_node.position = Vector3(0, -800, 0)
-	GameState.weapon_idx = 0            # unarmed: this demo is about the market and the swarm
+	GameState.weapon_idx = 2 if guns else 0   # pistol in hand: its trigger fires the server's stun pulse
 	if game.has_method("_refresh_weapon_model"): game._refresh_weapon_model()
 	_dress_pedestrians()
 	if ambient: _populate_district()
+	_place_heli()
 	_apply_look()
 	if time_hours >= 0.0: GameState.time_min = time_hours * 60.0
 	_set_notice("Every character is a ticker. Survive to grow your value. The city decides for itself.", 8.0)
@@ -456,7 +488,9 @@ func _send_join() -> void:
 func _on_message(msg: Dictionary) -> void:
 	match str(msg.get("t", "")):
 		"ack": _on_ack(msg)
-		"tick": _on_tick(msg)
+		"tick":
+			if _udp == null or not _udp.active: _on_tick(msg)   # UDP carries the world state when it is live
+		"udp": _on_udp_offer(msg)
 		"state": _on_state(msg)
 		"event":
 			var e = msg.get("e")
@@ -511,6 +545,11 @@ func _on_ack(msg: Dictionary) -> void:
 			print("[vice] demo.incident -> %s" % ["ok" if ok else str(err)])
 		"mode":
 			print("[vice] demo.setMode %s -> %s" % [want_mode, "ok" if ok else str(err)])
+		"weapon":
+			if not ok:
+				_last_fire = -10.0
+				_set_notice("PULSE: %s" % str(err.get("message", err.get("reason", "rejected"))), 2.0)
+				print("[vice] weapon.fire rejected: ", err)
 		"trade":
 			if ok: _set_notice("ORDER FILLED", 2.0)
 			else: _set_notice("ORDER: %s" % str(err.get("reason", err.get("message", "rejected"))), 3.0)
@@ -537,13 +576,28 @@ func _on_state(msg: Dictionary) -> void:
 		_prev_spot = spot
 
 
+func _on_udp_offer(msg: Dictionary) -> void:
+	# The server offers a UDP fast path after a join. Browsers have no UDP sockets, so the web build stays on WebSocket.
+	if not udp_on or web_embed: return
+	var h := url.get_slice("://", 1).get_slice("/", 0)
+	if h.contains(":"): h = h.get_slice(":", 0)
+	if _udp == null: _udp = load("res://scripts/autoload/vice_udp.gd").new()
+	_udp.start(h, int(msg.get("port", 0)), str(msg.get("token", "")), int(msg.get("hz", 30)), _now())
+
 func _on_tick(msg: Dictionary) -> void:
 	ticks_seen += 1
 	for c in msg.get("characters", []):
 		var id := str(c.get("id", ""))
 		if entities.has(id):
 			var e: Dictionary = entities[id]
-			e.sim = Vector2(float(c.get("x", 0.0)), float(c.get("z", 0.0)))
+			var ns := Vector2(float(c.get("x", 0.0)), float(c.get("z", 0.0)))
+			var tnow := _now()
+			var dtt: float = tnow - float(e.last_t)
+			if dtt > 0.05:
+				e.speed = lerpf(float(e.speed), ns.distance_to(e.last_sim) / dtt, 0.5)
+				e.last_sim = ns
+				e.last_t = tnow
+			e.sim = ns
 			e.heat = float(c.get("heat", 0.0))
 			e.status = str(c.get("status", ""))
 	for n in msg.get("npcs", []):
@@ -615,6 +669,25 @@ func _on_event(e: Dictionary) -> void:
 			_show_banner("%s  →  V$0" % str(p.get("ticker", "?")),
 				("YOU WERE CAPTURED by %s. Press R for a new character and a new ticker." % str(p.get("captorName", "?"))) if mine
 				else ("Captured by %s. Listing halted. Bounty V$%d." % [str(p.get("captorName", "?")), int(p.get("bounty", 0))]), 8.0)
+		"WEAPON_FIRED":
+			_shots_seen += 1
+			var hit_id := str(p.get("hitId", "")) if p.get("hitId") != null else ""
+			line = "%s fired a stun pulse%s" % [str(p.get("shooterName", "?")), "" if hit_id == "" else " — HIT"]
+			_fx_tracer(Vector2(float(p.get("x", 0.0)), float(p.get("z", 0.0))), Vector2(float(p.get("toX", 0.0)), float(p.get("toZ", 0.0))), hit_id != "")
+			var sid := str(p.get("shooterId", ""))
+			if sid == my_character_id or sid == my_player_id: my_ammo = int(p.get("ammoLeft", my_ammo))
+			elif game != null and typeof(AudioFX) != TYPE_NIL: AudioFX.gunshot("PISTOL")
+		"STUNNED":
+			_stuns_seen += 1
+			var tid := str(p.get("targetId", ""))
+			var secs := 3.0
+			line = "%s is STUNNED for %d s (no damage)" % [str(p.get("targetName", "?")), int(secs)]
+			_stun_until[tid] = _now() + secs
+			if tid == my_character_id and my_character_id != "":
+				_my_stun_until = _now() + secs
+				_stun_pos = game.player_pos
+				_set_notice("YOU ARE STUNNED — %d s" % int(secs), secs)
+			print("[vice] STUNNED target=%s mine=%s" % [tid, str(tid == my_character_id)])
 		"ROOM_RESET":
 			line = "ROOM RESET (seeded)"
 			need_teleport = true
@@ -660,6 +733,7 @@ func _ensure_entity(id: String, kind: String, sim: Vector2) -> Dictionary:
 	if entities.has(id) and entities[id].kind == kind: return entities[id]
 	if entities.has(id): _drop_entity(id)
 	var node := _build_figure(kind, id)
+	var body: Array = node.get_children()
 	var color: Color = ROLE_COLOR.get(kind, TEXT)
 	var label := Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -708,7 +782,8 @@ func _ensure_entity(id: String, kind: String, sim: Vector2) -> Dictionary:
 	var pos := Vector3(f.x, _ground(f.x, f.y), f.y)
 	node.position = pos
 	var e := {"node": node, "label": label, "ring": ring, "marker": marker, "lights": lights, "kind": kind, "sim": sim, "pos": pos, "yaw": 0.0, "phase": randf() * TAU,
-		"base": "", "extra": "", "activity": "", "pending": false, "heat": 0.0, "status": "", "moving": false}
+		"base": "", "extra": "", "activity": "", "pending": false, "heat": 0.0, "status": "", "moving": false,
+		"body": body, "car": null, "in_car": false, "speed": 0.0, "last_sim": sim, "last_t": _now()}
 	entities[id] = e
 	return e
 
@@ -775,13 +850,19 @@ func _update_entities(dt: float) -> void:
 				e.yaw = lerp_angle(e.yaw, atan2(pp.x - e.pos.x, pp.z - e.pos.z), clampf(dt * 3.0, 0.0, 1.0))
 		node.position = e.pos
 		node.rotation.y = e.yaw
-		Human.animate(node, e.phase, e.moving, 0.55, 0.33)
+		var down: bool = _stun_until.has(id) and _now() < float(_stun_until[id])
+		node.rotation.x = lerpf(node.rotation.x, -1.4 if down else 0.0, clampf(dt * 12.0, 0.0, 1.0))
+		if down: node.position.y += 0.35
+		_entity_car(e)
+		if not down: Human.animate(node, e.phase, e.moving and not e.in_car, 0.55, 0.33)
 		var txt: String = e.base
 		if e.kind in ["WITNESS", "INFORMANT", "TRADER", "POLICE"]:
 			if e.activity != "" and e.activity != "IDLE": txt += " · " + e.activity
 			if e.pending: txt += "\n◆ DECIDING…"
 		else:
 			if e.status == "WANTED" or e.extra == "WANTED": txt += " · WANTED"
+			if e.in_car: txt += " · DRIVING"
+		if down: txt += "\n⚡ STUNNED"
 		var lab: Label3D = e.label
 		if lab.text != txt: lab.text = txt
 		var ring: MeshInstance3D = e.ring
@@ -1197,15 +1278,22 @@ func _send_pose(dt: float) -> void:
 	var c := _my_character()
 	var st := str(c.get("status", ""))
 	if st != "ACTIVE" and st != "WANTED": return
+	var fast: bool = _udp != null and _udp.active
 	_pose_t -= dt
 	if _pose_t > 0.0: return
-	_pose_t = POSE_INTERVAL
+	_pose_t = _udp.POSE_INTERVAL if fast else POSE_INTERVAL
 	var s := my_sim_pos()
 	var clamped := Vector2(clampf(s.x, SIM_MIN.x, SIM_MAX.x), clampf(s.y, SIM_MIN.y, SIM_MAX.y))
 	outside_sector = clamped.distance_to(s) > 0.75
 	if clamped.distance_to(_last_pose) < 0.03 and _now() - _last_pose_sent_at < 1.0: return
 	_last_pose = clamped
 	_last_pose_sent_at = _now()
+	if fast:
+		# Same pose, same server checks, sent as a datagram at up to 30 Hz (heading in radians; flags: 1 in a car).
+		var yaw := 0.0
+		if game != null and game.player_node != null: yaw = game.player_node.rotation.y
+		_udp.send_pose(clamped.x, clamped.y, yaw, 0)
+		return
 	_send({"type": "player.pose", "x": snappedf(clamped.x, 0.01), "z": snappedf(clamped.y, 0.01)}, "pose")
 
 func _update_prompts() -> void:
@@ -1431,7 +1519,7 @@ func _update_hud() -> void:
 		hud_stats.text = ""
 		hud_feed.text = ""
 		return
-	hud_title.text = "VICE EXCHANGE   ·   ROOM %s   ·   %s   ·   V$ ARE FICTIONAL GAME CREDITS" % [str(state.get("roomCode", room_code)), str(state.get("badge", ""))]
+	hud_title.text = "VICE EXCHANGE   ·   ROOM %s   ·   %s   ·   %s   ·   V$ ARE FICTIONAL GAME CREDITS" % [str(state.get("roomCode", room_code)), str(state.get("badge", "")), _udp.hud_text() if _udp != null else "NET: WS 10 Hz"]
 	var c := _my_character()
 	var w = state.get("wallet")
 	var wallet_txt := ("WALLET V$%d" % int(w.get("balanceCredits", 0))) if typeof(w) == TYPE_DICTIONARY else ""
@@ -1457,7 +1545,7 @@ func _update_hud() -> void:
 		hud_heat_fill.color = AQUA.lerp(DANGER, clampf(heat / 60.0, 0.0, 1.0))
 		hud_heat_text.text = "%d   WANTED LEVEL %d/5" % [int(heat), lvl] if is_wanted else "%d   NOT WANTED" % int(heat)
 		hud_heat_text.add_theme_color_override("font_color", DANGER if is_wanted else DIM)
-		hud_stats.text = "%s   %s%s" % [wallet_txt, ("JOB %d m" % int(md)) if md >= 0.0 else "NO JOB YET", "   OUTSIDE CORAL BAY SECTOR" if outside_sector else ""]
+		hud_stats.text = "%s   %s%s%s" % [wallet_txt, ("JOB %d m" % int(md)) if md >= 0.0 else "NO JOB YET", _gun_txt(c), "   OUT OF THE DISTRICT" if outside_sector else ""]
 	else:
 		var tgt := ""
 		for o in state.get("characters", []):
@@ -1470,7 +1558,7 @@ func _update_hud() -> void:
 		hud_heat_row.visible = false
 		hud_main.text = "HUNTER   %s" % (tgt if tgt != "" else "no outlaws in the city")
 		hud_main.add_theme_color_override("font_color", TEXT)
-		hud_stats.text = "%s%s" % [wallet_txt, "   OUTSIDE CORAL BAY SECTOR" if outside_sector else ""]
+		hud_stats.text = "%s%s%s" % [wallet_txt, _gun_txt(c), "   OUT OF THE DISTRICT" if outside_sector else ""]
 	hud_feed.text = "\n".join(_feed)
 	var prompt := ""
 	match _prompt_action:
@@ -1859,3 +1947,297 @@ func _run_shots() -> void:
 	if game.camera != null: game.camera.current = true
 	print("VICE_SHOTS_OK entities=%d ticks=%d" % [entities.size(), ticks_seen])
 	get_tree().quit()
+
+
+# ================================================================ guns, cars, helicopter
+## Called by the city's own trigger (scripts/game.gd _fire_weapon, patched by apply.py). In VICE mode the
+## local bullet, damage and wanted system never run: the shot is a server-side stun pulse, so nothing
+## happens here that the server does not know about.
+func fire(w: Dictionary) -> void:
+	if not guns or not joined or my_character_id == "" or game == null: return
+	if bool(w.get("melee", false)): return
+	var dir: Vector3 = -game.camera.global_transform.basis.z
+	fire_dir(Vector2(dir.x, dir.z), str(w.get("name", "PISTOL")))
+
+func fire_dir(city_dir: Vector2, weapon_name := "PISTOL") -> void:
+	var c := _my_character()
+	var st := str(c.get("status", ""))
+	if st != "ACTIVE" and st != "WANTED": return
+	if _now() < _my_stun_until: return
+	if _now() - _last_fire < 2.5:
+		_set_notice("Pulse recharging…", 0.7)
+		return
+	var sd := Vector2(city_dir.x / SCALE.x, city_dir.y / SCALE.y)
+	if sd.length() < 0.001: return
+	sd = sd.normalized()
+	_last_fire = _now()
+	_send({"type": "weapon.fire", "dirX": snappedf(sd.x, 0.001), "dirZ": snappedf(sd.y, 0.001), "commandId": _cid("gwpn")}, "weapon")
+	AudioFX.gunshot(weapon_name)
+	Gamepad.pulse(0.55, 0.6, 0.16)
+	var cd := Vector3(city_dir.x, 0, city_dir.y).normalized()
+	_fx_flash(game.player_pos + Vector3(0, 1.45, 0) + cd * 0.9)
+
+func _gun_txt(c: Dictionary) -> String:
+	if not guns: return ""
+	var ammo := my_ammo
+	if c.get("ammo") != null: ammo = int(c.get("ammo"))
+	var cool: float = 2.5 - (_now() - _last_fire)
+	var txt := "   PULSE %s/6" % (str(ammo) if ammo >= 0 else "6")
+	if _now() < _my_stun_until: txt += "  STUNNED"
+	elif cool > 0.0: txt += "  recharging %.1fs" % cool
+	else: txt += "  READY"
+	return txt
+
+func _fx_flash(at: Vector3) -> void:
+	var m := _orb(Color("fff2a8"), 0.22)
+	m.position = at
+	game.add_child(m)
+	var l := OmniLight3D.new()
+	l.light_color = Color("ffd98a")
+	l.light_energy = 6.0
+	l.omni_range = 9.0
+	l.shadow_enabled = false
+	m.add_child(l)
+	_tracers.append({"node": m, "t": 0.0, "life": 0.09})
+
+func _fx_tracer(a_sim: Vector2, b_sim: Vector2, hit: bool) -> void:
+	if game == null: return
+	var a2 := sim_to_city(a_sim.x, a_sim.y)
+	var b2 := sim_to_city(b_sim.x, b_sim.y)
+	var a := Vector3(a2.x, _ground(a2.x, a2.y) + 1.4, a2.y)
+	var b := Vector3(b2.x, _ground(b2.x, b2.y) + 1.2, b2.y)
+	var seg := a.distance_to(b)
+	if seg < 0.2: return
+	var beam := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.09, 0.09, seg)
+	beam.mesh = bm
+	beam.material_override = _glow(Color("7dfff0") if hit else Color("ffd166"), 9.0)
+	game.add_child(beam)
+	beam.look_at_from_position((a + b) * 0.5, b, Vector3.UP)
+	_tracers.append({"node": beam, "t": 0.0, "life": 0.45})
+	_fx_flash(a)
+	if hit:
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.9
+		tm.outer_radius = 1.05
+		ring.mesh = tm
+		ring.material_override = _glow(Color("7dfff0"), 8.0)
+		ring.position = Vector3(b.x, b.y - 1.1, b.z)
+		game.add_child(ring)
+		_tracers.append({"node": ring, "t": 0.0, "life": 3.0, "grow": true})
+
+func _update_weapons(dt: float) -> void:
+	var keep: Array = []
+	for f in _tracers:
+		f.t += dt
+		var n = f.node
+		if not is_instance_valid(n): continue
+		if f.t >= f.life:
+			n.queue_free()
+			continue
+		if f.get("grow", false):
+			var k: float = 1.0 + 0.25 * sin(f.t * 10.0)
+			n.scale = Vector3(k, 1.0, k)
+		keep.append(f)
+	_tracers = keep
+	# Knocked down: the local player is held in place and laid flat until the stun ends.
+	if game != null and game.player_node != null:
+		if _now() < _my_stun_until:
+			if game.in_car == null:
+				game.player_pos = _stun_pos
+				game.player_node.position = _stun_pos + Vector3(0, 0.35, 0)
+			game.player_node.rotation.x = -1.4
+		elif absf(game.player_node.rotation.x) > 0.01:
+			game.player_node.rotation.x = 0.0
+
+## A remote player moving at driving speed is shown in a car instead of as a sprinting figure.
+func _entity_car(e: Dictionary) -> void:
+	if e.kind != "OUTLAW" and e.kind != "HUNTER": return
+	var fast: bool = float(e.speed) > 13.0
+	var slow: bool = float(e.speed) < 5.0
+	if fast and not e.in_car:
+		e.in_car = true
+		if e.car == null and game.has_method("_make_vehicle"):
+			var v = game._make_vehicle(e.pos.x, e.pos.z, game.VEHICLE_COLORS[0], "sedan")
+			var cn: Node3D = v.node
+			cn.get_parent().remove_child(cn)
+			(e.node as Node3D).add_child(cn)
+			cn.position = Vector3.ZERO
+			cn.rotation = Vector3.ZERO
+			e.car = cn
+	elif slow and e.in_car:
+		e.in_car = false
+	if e.car != null: (e.car as Node3D).visible = e.in_car
+	for b in e.body:
+		if is_instance_valid(b): (b as Node3D).visible = not e.in_car
+
+## One flyable helicopter on open ground inside the district (the city's own one sits on the airport island).
+func _place_heli() -> void:
+	if not heli_on or web_embed or game == null or not game.has_method("_make_helicopter"): return
+	for s in [Vector2(62, 54), Vector2(92, 54), Vector2(32, 54), Vector2(62, 28), Vector2(92, 28)]:
+		var g := sim_to_city(s.x, s.y)
+		if game.world.collides_at(g.x, g.y, 4.5): continue
+		var blocked := false
+		for v in game.vehicles:
+			if Vector2(v.pos.x - g.x, v.pos.z - g.y).length() < 9.0: blocked = true
+		if blocked: continue
+		_heli = game._make_helicopter(g.x, g.y, 0.0)
+		game.vehicles.append(_heli)
+		print("[vice] helicopter parked at city (%.1f, %.1f) = sim (%.0f, %.0f)" % [g.x, g.y, s.x, s.y])
+		return
+	print("[vice] no clear ground for the helicopter")
+
+func _hold(keycode: int, on: bool) -> void:
+	var ev := InputEventKey.new()
+	ev.physical_keycode = keycode
+	ev.keycode = keycode
+	ev.pressed = on
+	Input.parse_input_event(ev)
+
+func _nearest_human() -> String:
+	var best := ""
+	var bd := 1e9
+	var me := my_sim_pos()
+	for id in entities.keys():
+		var e: Dictionary = entities[id]
+		if e.kind != "OUTLAW" and e.kind != "HUNTER": continue
+		var d: float = me.distance_to(e.sim)
+		if d < bd:
+			bd = d
+			best = id
+	return best
+
+## Scripted verification runs (two real clients against a real server). Every action goes through the
+## same code a player's key reaches: fire_dir(), the city's _try_enter_exit(), and held movement keys.
+func _run_demo(dt: float) -> void:
+	if not (joined and have_state and ticks_seen >= 10 and _started_game): return
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_demo_t += dt
+	match demo:
+		"gun":
+			var id := _nearest_human()
+			if id == "":
+				if _demo_t > 40.0: _fail("no other player to shoot at")
+				return
+			var e: Dictionary = entities[id]
+			var me := my_sim_pos()
+			var d: float = me.distance_to(e.sim)
+			if _demo_stage == "":
+				if d > 9.0:
+					var g := sim_to_city(e.sim.x, e.sim.y)
+					var to: Vector3 = Vector3(g.x, 0, g.y) - game.player_pos
+					to.y = 0
+					# test driver only: a straight line at 28 m/s (the server speed-checks bridge poses, nothing else)
+					game.player_pos = game.player_pos + to.normalized() * minf(28.0 * dt, to.length())
+					game.player_node.position = game.player_pos
+					game.cam_yaw = atan2(-to.x, -to.z)
+					if _demo_t > 60.0: _fail("could not reach the other player")
+				else:
+					_demo_stage = "fire"
+					_demo_t = 0.0
+					var g2 := sim_to_city(e.sim.x, e.sim.y)
+					var dv := Vector2(g2.x - game.player_pos.x, g2.y - game.player_pos.z)
+					game.cam_yaw = atan2(-dv.x, -dv.y)
+					game.cam_pitch = 0.1
+					fire_dir(dv)
+					_shot_later("gun_1_fire", 0.12)
+					_shot_later("gun_2_target_down", 1.2)
+			elif _demo_stage == "fire" and _demo_t > 4.5:
+				print("VICE_DEMO gun shots_seen=%d stuns_seen=%d ammo=%d pose_rejects=%d" % [_shots_seen, _stuns_seen, my_ammo, pose_rejects])
+				if _stuns_seen > 0: print("VICE_DEMO_OK gun")
+				else: print("VICE_DEMO_FAIL gun (no STUNNED event)")
+				_demo_stage = "done"
+				_demo_quit(0 if _stuns_seen > 0 else 1)
+		"victim":
+			if _demo_stage == "" and _now() < _my_stun_until:
+				_demo_stage = "hit"
+				_demo_t = 0.0
+				_demo_p0 = my_sim_pos()
+				_hold(KEY_W, true)
+				_shot_later("victim_1_stunned", 0.6)
+			elif _demo_stage == "hit" and _demo_t > 2.4:
+				_hold(KEY_W, false)
+				print("VICE_DEMO victim moved_while_stunned=%.2f m" % my_sim_pos().distance_to(_demo_p0))
+				print("VICE_DEMO_OK victim")
+				_demo_stage = "done"
+				_demo_quit(0)
+			elif _demo_t > 90.0: _fail("never stunned")
+		"car":
+			if _demo_stage == "":
+				var best = null
+				var bd := 1e9
+				for v in game.vehicles:
+					if v.get("is_plane", false) or v.get("is_boat", false): continue
+					var s := city_to_sim(v.pos.x, v.pos.z)
+					if s.x < 8 or s.x > 112 or s.y < 8 or s.y > 66: continue
+					var dd: float = game.player_pos.distance_to(v.pos)
+					if dd < bd:
+						bd = dd
+						best = v
+				if best == null: return _fail("no car in the district")
+				game.player_pos = best.pos + Vector3(2.2, 0, 0)
+				game.player_node.position = game.player_pos
+				_demo_stage = "settle"
+				_demo_t = 0.0
+			elif _demo_stage == "settle" and _demo_t > 1.2:
+				game._try_enter_exit()
+				print("VICE_DEMO car entered=%s" % str(game.in_car != null))
+				if game.in_car == null: return _fail("could not enter the car")
+				_demo_stage = "drive"
+				_demo_t = 0.0
+				_demo_p0 = my_sim_pos()
+				_hold(KEY_W, true)
+				_shot_later("car_1_driving", 2.5)
+			elif _demo_stage == "drive" and _demo_t > 6.0:
+				_hold(KEY_W, false)
+				var moved: float = my_sim_pos().distance_to(_demo_p0)
+				print("VICE_DEMO car drove=%.1f sim m in 6 s speed=%.1f pose_rejects=%d outside=%s" % [moved, float(game.in_car.get("speed", 0.0)) if game.in_car != null else 0.0, pose_rejects, str(outside_sector)])
+				print("VICE_DEMO_OK car" if moved > 15.0 else "VICE_DEMO_FAIL car")
+				_demo_stage = "done"
+				_demo_quit(0 if moved > 15.0 else 1)
+		"watch":
+			var wid := _nearest_human()
+			if wid != "":
+				var we: Dictionary = entities[wid]
+				if _demo_stage == "" and we.in_car:
+					_demo_stage = "seen"
+					_demo_t = 0.0
+					game.player_pos = Vector3(we.pos.x + 7.0, 0, we.pos.z + 7.0)
+					game.player_node.position = game.player_pos
+					game.cam_yaw = atan2(7.0, 7.0)
+					print("VICE_DEMO watch remote_in_car speed=%.1f sim m/s" % float(we.speed))
+					_shot_later("watch_1_remote_car", 0.4)
+				elif _demo_stage == "seen" and _demo_t > 1.5:
+					print("VICE_DEMO_OK watch")
+					_demo_stage = "done"
+					_demo_quit(0)
+			if _demo_t > 90.0: _fail("never saw the remote player in a car")
+		"heli":
+			if _demo_stage == "":
+				if _heli == null: return _fail("no helicopter placed")
+				game.player_pos = _heli.pos + Vector3(3.0, 0, 0)
+				game.player_node.position = game.player_pos
+				_demo_stage = "settle"
+				_demo_t = 0.0
+			elif _demo_stage == "settle" and _demo_t > 1.2:
+				_shot("heli_0_parked")
+				game._try_enter_exit()
+				print("VICE_DEMO heli boarded=%s" % str(game.in_car != null and game.in_car.get("is_heli", false)))
+				if game.in_car == null: return _fail("could not board the helicopter")
+				_demo_stage = "climb"
+				_demo_t = 0.0
+				_hold(KEY_UP, true)
+				_shot_later("heli_1_airborne", 3.0)
+			elif _demo_stage == "climb" and _demo_t > 5.0:
+				_hold(KEY_UP, false)
+				var alt: float = float(game.in_car.pos.y) if game.in_car != null else 0.0
+				print("VICE_DEMO heli altitude=%.1f m pose_rejects=%d" % [alt, pose_rejects])
+				print("VICE_DEMO_OK heli" if alt > 5.0 else "VICE_DEMO_FAIL heli")
+				_demo_stage = "done"
+				_demo_quit(0 if alt > 5.0 else 1)
+
+func _demo_quit(code: int) -> void:
+	_finish_recording()
+	get_tree().quit(code)

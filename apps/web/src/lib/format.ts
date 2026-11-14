@@ -20,6 +20,7 @@ export const CATEGORY: Record<EventType, EventCategory> = {
   CAPTURE_REJECTED: "capture", LISTING_HALTED: "capture", CHARACTER_ARCHIVED: "capture", CHARACTER_RESPAWNED: "world",
   POLICY_INGESTED: "system", WEAPON_FIRED: "capture", STUNNED: "capture",
   CREW_JOINED: "capture", CREW_LEFT: "capture", CREW_BETRAYED: "capture",
+  CREW_TIP: "agent", OUTLAW_WARNED: "agent", INFORMANT_SWITCHED_SIDES: "agent",
 };
 
 /** Honest source labels: only "drex" is ever shown as Drex. */
@@ -75,6 +76,9 @@ export function describeEvent(e: GameEvent, s: GameState): string {
     case "CAPTURE_SUCCEEDED": return `${p.captorName} CAPTURED ${p.ticker ?? n(p.characterId)} after ${Math.round(p.survivalSeconds)} s${p.bounty ? ` · bounty ${vd(p.bounty)}` : ""}${p.doubleCross ? ` · DOUBLE-CROSS: took it all from crew ${p.crewName}` : Array.isArray(p.shares) && p.shares.length > 1 ? ` · split ${p.shares.length} ways in crew ${p.crewName} (${p.shares.map((x: { amount: number }) => vd(x.amount)).join(" / ")})` : ""}`;
     case "CREW_JOINED": return `${p.nickname} ${p.created ? "formed" : "joined"} hunter crew ${p.crewName} (${p.memberPlayerIds.length} of ${RULES.crew.maxMembers})`;
     case "CREW_LEFT": return `${p.nickname} ${p.reason === "EJECTED" ? "was thrown out of" : "left"} crew ${p.crewName}`;
+    case "CREW_TIP": return `${p.informantName} sold the last known location of ${p.ticker ?? n(p.characterId)} to crew ${p.crewName} for ${vd(p.fee)} (earned ${vd(p.earnings)} so far)`;
+    case "OUTLAW_WARNED": return `${p.informantName} sold ${p.ticker ?? n(p.characterId)} a warning: crew ${p.crewNames.join(", ")} is hunting them (${vd(p.fee)})`;
+    case "INFORMANT_SWITCHED_SIDES": return `${p.informantName} SWITCHED SIDES: from the ${p.from} to the ${p.to}`;
     case "CREW_BETRAYED": return `DOUBLE-CROSS in crew ${p.crewName}: ${p.betrayerName} stunned ${p.victimNames.join(" and ")} and kept the whole ${vd(p.bounty)} bounty`;
     case "CAPTURE_REJECTED": return `Capture attempt by ${n(p.captorId)} rejected: ${String(p.reason).toLowerCase().replace(/_/g, " ")}`;
     case "LISTING_HALTED": return `${p.ticker} HALTED — ${vd(p.finalSpotBeforeHalt)} → V$0`;

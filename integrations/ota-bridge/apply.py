@@ -38,6 +38,13 @@ if not dest.exists() or dest.read_text() != src.read_text():
     shutil.copyfile(src, dest)
     changed.append("scripts/autoload/vice_bridge.gd: copied")
 
+# 1b. the UDP fast-path helper the autoload loads on demand (see vice_udp.gd)
+udp_dest = target / "scripts" / "autoload" / "vice_udp.gd"
+udp_src = here / "vice_udp.gd"
+if not udp_dest.exists() or udp_dest.read_text() != udp_src.read_text():
+    shutil.copyfile(udp_src, udp_dest)
+    changed.append("scripts/autoload/vice_udp.gd: copied")
+
 patch("project.godot",
       'SaveGame="*res://scripts/autoload/save_game.gd"\n',
       'SaveGame="*res://scripts/autoload/save_game.gd"\nViceBridge="*res://scripts/autoload/vice_bridge.gd"\n',
@@ -77,6 +84,13 @@ patch("scripts/autoload/save_game.gd",
       "func save_now() -> void:\n",
       f"func save_now() -> void:\n\tif ViceBridge.active:  {MARK}\n\t\treturn\n",
       "do not save in bridge mode")
+
+# 5b. the trigger: in bridge mode a shot is the server's stun pulse. The city's own bullets, damage and
+#     wanted system never run, so nothing is hit locally that the server does not know about.
+patch("scripts/game.gd",
+      "func _fire_weapon(w: Dictionary) -> void:\n",
+      f"func _fire_weapon(w: Dictionary) -> void:\n\tif ViceBridge.active:  {MARK}\n\t\tViceBridge.fire(w)\n\t\treturn\n",
+      "trigger fires the server's stun pulse in bridge mode")
 
 
 # 6. Web export preset (the browser UI embeds this build as its WORLD view)

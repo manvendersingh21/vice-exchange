@@ -5,6 +5,7 @@ import { createBrains, createMemoryStore } from "../agents";
 import { createScheduler } from "../decisions";
 import { createEconomy } from "../economy";
 import { createMetrics } from "../metrics";
+import { FugitiveAgent } from "../demo/Fugitive";
 import { RoomEngine } from "./RoomEngine";
 import { systemClock } from "./util";
 
@@ -19,9 +20,11 @@ export interface RoomFactoryDeps {
   experiments?: () => ExperimentResult[];
   onRunExperiment?: (engine: RoomEngine, durationSec: number) => ExperimentResult | null;
 }
-export interface BuiltRoom { engine: RoomEngine; scheduler: SchedulerPort; metrics: MetricsPort }
+export interface BuiltRoom { engine: RoomEngine; scheduler: SchedulerPort; metrics: MetricsPort; fugitive?: FugitiveAgent | null }
 export interface RoomBuildOpts {
   roomId: string; code: string; seed: number; mode: DecisionMode; concurrency?: number; clock?: Clock;
+  /** Add the autonomous hunted outlaw to this room. Off unless asked (tests and experiment lanes do not get one). */
+  fugitive?: boolean;
   /** Per-room override of ProviderConfig.shadowMeta (experiment lanes turn it off). */
   shadowMeta?: boolean;
   /** A ready scheduler, or a factory that receives the room's hooks (tests use this with stub providers). */
@@ -45,6 +48,6 @@ export function createRoomFactory(deps: RoomFactoryDeps): (o: RoomBuildOpts) => 
       experiments: deps.experiments, onRunExperiment: deps.onRunExperiment,
     }, { roomId: o.roomId, code: o.code, seed: o.seed, mode: o.mode });
     room = engine;
-    return { engine, scheduler, metrics };
+    return { engine, scheduler, metrics, fugitive: o.fugitive ? new FugitiveAgent(engine) : null };
   };
 }
