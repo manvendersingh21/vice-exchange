@@ -14,3 +14,7 @@ playwright-report/
 test-results/
 .vite/
 
+integrations/open-theft-auto/
+
+.swarm/repro/
+e2e/out/

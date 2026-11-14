@@ -18,7 +18,8 @@
     "start:server": "npm run start -w @vice/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test -w @vice/server",
-    "build": "npm run build -w @vice/web"
+    "build": "npm run build -w @vice/web",
+    "replay": "npm run replay -w @vice/server --"
   },
   "devDependencies": {
     "concurrently": "^10.0.7",
