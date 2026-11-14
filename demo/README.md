@@ -1,99 +1,92 @@
 # VICE EXCHANGE demo videos
 
-Two files, both cut from one real run recorded on 2026-11-14 (take 2): a real server on a spare port with a fresh
-database, three headless Chrome browsers (Outlaw "Ace", Hunter "Rio", Spectator "Judge") driven in real time over the
-Chrome DevTools Protocol, and real Nace Drex decisions. Nothing on screen is mocked or staged.
+Recorded 2026-11-14 on commit 701b34c. Two files:
 
-## What is real
-- Every NPC decision in the browser footage is a live Drex call from that run: 10 decisions, 10 decided by Drex,
-  0 low-confidence guardrail, 0 fallback (read from the run's own metrics panel, which is on screen at the end).
-- Drex round trip in that run: median 389 ms, p95 537 ms over 10 calls. Live shadow comparison: 10 compared, 7 agreed,
-  Meta median 988 ms. Experiment table on screen: Meta p50 774 ms / p95 1251 ms, Drex p50 323 ms / p95 565 ms, 8 calls each.
-- Capture by Sgt. Imani Duarte (police NPC) 49 s after spawn; ACE-01 halted at exactly V$0; respawn as ACE-02.
-- Replay check shown is the server's own `/replay/verify` response: ok, 88 events, 0 mismatches.
-- The 3D segment is the Godot client's own recording (`integrations/ota-bridge/frames/vice_exchange_3d_full_chain.mp4`),
-  sped up; it is a separate run against the same server code, in Drex mode.
-- Title, track and "how it is built" cards are rendered HTML, not footage. The track text is quoted verbatim.
-- Audio: narration is macOS `say`; the bed and effect cues (a tick per resolved decision, a low hit on capture) are
-  generated with ffmpeg sine and noise sources. No music or samples from anywhere else.
+- `demo/vice-exchange-demo.mp4`: 185.3 s, 1920x1080 H.264 + AAC stereo, narration and captions.
+- `demo/vice-exchange-npcs.mp4`: 45.0 s, the multi-agent footage only, with narration.
 
-## Not captured, and other limits
-- A rejected buy on the halted ticker, and the provider-failure moment (badge DREX: FALLBACK), are not in the video.
-  Both are covered by the end-to-end harness (`e2e/out/report.json`), not shown here.
-- Traders took different positions on the same ticker (one bought, one held); no trader sold in this run, and the human
-  hunter did not race the police, so the video does not claim either.
-- The frame rate of the browser footage is low (about 3 to 6 frames per second): frames are CDP screenshots taken while
-  three browsers ran at once. The capture cinematic is on screen for only a few frames because screenshots stalled
-  while it played.
-- During recording the Outlaw page stopped answering DevTools for about 54 s from the moment of capture (with the
-  Agent Inspector open). The spectator page was fine, so the capture shot uses the spectator's view. Not reproduced
-  outside this recording set-up.
+## How the videos are put together
+- **The game footage is the modified Open Theft Auto** (MIT-licensed open-source Godot city, see `integrations/ota-bridge/`):
+  `integrations/ota-bridge/frames/vice_exchange_ota_hunt.mp4`, recorded by the native Godot clients against the real
+  server in Drex mode. Shot in/out points are in `demo/ota-shots.json`. Per its author: the first 17 s (flyover, the
+  job with the witness report and bulletin) are reused from an earlier clip in which the outlaw was a scripted test
+  client, not the fugitive agent, so the caption says "a job", not Ryder; 17 to 53.5 s is new footage with the
+  Drex-driven fugitive Ryder and a human hunter; the car and helicopter shots are reused from an earlier clip.
+- **The browser is shown as the trading-floor terminal**, cropped to its panels (decision cards, market, Agent
+  Intelligence with the agent P&L strip and swarm graph). It is a separate real run on a fresh server: one headless
+  Chrome as a spectator, captured with `Page.startScreencast` at 1600x900 (measured 48 fps
+  during the fugitive chain and 57.8 fps during the proof section). Two more headless pages joined
+  as human hunters in one crew ("WOLVES") so the crew forms on camera; they were not recorded.
+- The Open Theft Auto clip and the terminal take are **different runs of the same server code**. Nothing is mocked.
+- Cards (title, track quoted verbatim, "the game", "how it is built", end) are rendered HTML.
+
+## What is real in the terminal take
+- 16 agent decisions: 13 decided by Drex, 3 low-confidence guardrail, 0 fallback. By role: {'TRADER': 8, 'FUGITIVE': 2, 'WITNESS': 2, 'POLICE': 3, 'INFORMANT': 1}.
+- Drex round trip in that run: median 307 ms, p95 402 ms over 16 calls. Live shadow comparison: 14 compared, 13 agreed, Meta median 721 ms.
+- The fugitive agent Ryder (ticker RYD-01) was captured by Sgt. Imani Duarte (police NPC); the listing halted at exactly V$0.
+- Traders, read from the server snapshot at the end of the take: [{'name': 'Priya Castellan', 'credits': 1997, 'holdings': {}}, {'name': 'Rook Halvorsen', 'credits': 2000, 'holdings': {}}]; trades: [['Priya Castellan', 'BUY', 'RYD-01', 125], ['Priya Castellan', 'SELL', 'RYD-01', 122]].
+- Experiment table on screen: [{'mode': 'scripted', 'calls': 0, 'p50': None, 'p95': None, 'trades': 0, 'captured': True}, {'mode': 'meta', 'calls': 8, 'p50': 809, 'p95': 1076, 'trades': 2, 'captured': True}, {'mode': 'drex', 'calls': 8, 'p50': 326, 'p95': 366, 'trades': 2, 'captured': True}].
+- Replay check: ok=True, 193 events, 0 mismatches (computed in the take; the shot itself was dropped from the main cut for length).
+
+## Audio
+- Narration: **Piper neural TTS, voice `en_US-ryan-high`** from the rhasspy/piper-voices repository (check that
+  repository's model card for the voice's license before any use beyond this demo). Each line is loudness-normalised
+  to about -16 LUFS. If Piper is missing, `assemble.mjs` falls back to macOS `say -v Daniel`.
+- Bed and effect cues (a tick per resolved decision, a low hit on capture) are generated with ffmpeg sine and noise
+  sources. No music or samples from anywhere else.
+- The opening line names another game once, in speech only, as the inspiration; nothing on screen presents this
+  project as that game.
+
+## Not shown, and limits
+- A crew bounty split or double-cross is not in the video: in the take the police reached the fugitive before the
+  hunter crew did, so the crew moment is the crew forming and the trader agents reacting to it.
+- The browser gun hunt (stun pulse in the browser 3D view) is not in the video; the gun footage is from the Open Theft
+  Auto client. A driven browser version exists behind `HUMANS=1` in `record.mjs` but is untested end to end.
+- Dropped from the main cut to stay under 3:10: the replay-verify still and the "traders decide on a fresh listing"
+  shot (the traders' wallets shot is kept).
+- The provider-failure moment (badge DREX: FALLBACK) is not shown; it is covered by the end-to-end harness.
+- The experiment table is small on screen.
+- Nobody has listened to the final audio end to end; levels were checked with ffmpeg volumedetect only
+  (mean -19.6 dB, max -3.9 dB).
 
 ## How to re-record
 ```
-PORT=3771 DATABASE_URL=/tmp/vx-demo.sqlite WEB_ORIGIN=http://localhost:5771 npx tsx apps/server/src/index.ts
-(cd apps/web && VICE_SERVER=http://localhost:3771 npx vite --port 5771 --strictPort)
-OUT=/tmp/vx-take BASE=http://localhost:5771 API=http://localhost:3771 node demo/record.mjs
-TESTS=<passing count> TAKE=/tmp/vx-take WORK=/tmp/vx-work node demo/assemble.mjs   # ONLY=main or ONLY=npcs for one file
+python3.12 -m venv /tmp/vxtts && /tmp/vxtts/bin/pip install piper-tts    # use a SHORT path: Piper fails under very long paths
+mkdir -p /tmp/vxvoice   # put en_US-ryan-high.onnx and .onnx.json from rhasspy/piper-voices there as ryan.onnx / ryan.onnx.json
+PORT=3781 DATABASE_URL=/tmp/vx.sqlite WEB_ORIGIN=http://localhost:5781 npx tsx apps/server/src/index.ts
+(cd apps/web && VICE_SERVER=http://localhost:3781 npx vite --port 5781 --strictPort)
+OUT=/tmp/vx-take BASE=http://localhost:5781 API=http://localhost:3781 node demo/record.mjs      # start it right after the server boots
+TESTS=<passing count> TAKE=/tmp/vx-take WORK=/tmp/vx-work node demo/assemble.mjs               # ONLY=main or ONLY=npcs for one file
 ```
-Requires Google Chrome, ffmpeg and macOS `say`. Captions are rendered as PNGs by headless Chrome because this ffmpeg
-build has no drawtext filter.
+Requires Google Chrome, ffmpeg and (for the neural voice) Piper. Record on a quiet machine with nothing else running.
 
-## Main demo: `demo/vice-exchange-demo.mp4` (180.4 s, 1920x1080 H.264 + AAC stereo)
+## Main demo shot list
+| At | Length | Shot | Speed | Caption | Narration |
+|---|---|---|---|---|---|
+| 0:00 | 12.5 s | hype | 1x | (card) | Are you guys ready for G T A six? Say woo! Well, it's not out yet. So, inspired by open-world games like it, we built our own. Vice Exchange: a city where every agent is a trader. |
+| 0:12 | 5.9 s | title | 1x | (card) | Built on Open Theft Auto, an open source city. All the money is fictional game credits. |
+| 0:18 | 19.6 s | track | 1x | (card) | The track is Swarm Intelligence: multi-agent systems. Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, characters that think for themselves, or a team of agents dividing up a research task. This project is the first two at once. |
+| 0:38 | 14.5 s | game | 1x | (card) | Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it. |
+| 0:52 | 14.0 s | how-built | 1x | (card) | One step of the swarm. An agent sees something, or gets a message. One Drex call, built only from what that agent knows, returns a choice with probabilities. The server checks it is legal, applies it, and that triggers the next agent. |
+| 1:06 | 8.8 s | ota-city | 1x | Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker. | Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself. |
+| 1:15 | 8.0 s | ota-job | 1.5x | A job is witnessed and reported. Police publish a bulletin: WANTED, and the price falls. | A job is done. A witness sees it and reports. Police put out a bulletin. The outlaw is wanted, and the price falls. |
+| 1:23 | 10.0 s | terminal-chain | 1.85x | The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph. | The trading floor terminal shows every decision as it happens, with the options, the probabilities and the latency. |
+| 1:33 | 7.4 s | crew | 1.08x | Two human hunters form a crew to split the bounty. The trader agents see it and each decides what to do about it. | They team up. Two human hunters form a crew to split the bounty. The traders see it, and each one decides what to do about it. |
+| 1:40 | 7.6 s | pnl | 1x | After the capture: the officer is paid the bounty, the witness who reported gets a tip, and the traders mark their books. | Every agent is out for its own profit. The officer earns the bounty. The witness who reported earns a tip. The traders mark their books. |
+| 1:48 | 9.0 s | memory | 1x | Each agent knows only what it saw or was told: source and hop count on every fact. | Each agent knows only what it saw, or what it was told. Every fact carries its source and how many hands it passed through. |
+| 1:57 | 11.7 s | traders-wallets | 1x | Priya Castellan (momentum): 1 buys, 1 sells, wallet V$1997, 0 shares. Rook Halvorsen (risk-averse): 0 buys, 0 sells, wallet V$2000, 0 shares. | Priya chases momentum. In this run she bought 1 time and sold 1, and has 1997 credits left. Rook is risk averse. He held every time and kept all 2000 credits. |
+| 2:09 | 9.0 s | ota-hunt | 1.44x | Ryder fires his stun pulse at a human hunter. An officer pursues on a Drex decision and captures him: V$0. | Ryder turns on a human hunter and stuns him. Then an officer, on a Drex decision, runs him down. His stock goes to zero. |
+| 2:18 | 9.0 s | ota-capture | 1.72x | The hunter chases the next fugitive, stuns him and makes the capture: the ticker goes to exactly V$0 and the bounty is paid. | The hunter goes after the next one, stuns him, and takes the bounty. The longer he survived, the bigger it is. |
+| 2:27 | 8.0 s | ota-carheli | 1.44x | Still Open Theft Auto (MIT-licensed, open source): steal a car or take the helicopter. | And it is still Open Theft Auto. Steal a car, or take the helicopter. |
+| 2:35 | 7.0 s | ndi | 1x | Police decisions cite facts from a real document. | Police decisions cite a real San Francisco police order, parsed with N D I. |
+| 2:42 | 13.1 s | experiment | 3.14x | This run's metrics panel: 16 NPC decisions: 13 decided by Drex, 3 low-confidence guardrail, 0 fallback. Then one seed, three ways: scripted, Meta LLM, Drex (sped up). | In this run the metrics panel counts 16 decisions: 13 decided by Drex, 3 by the low confidence guardrail, and 0 by fallback. Then the same seed runs three ways: scripted, a language model, and Drex. |
+| 2:55 | 10.2 s | end | 1x | (card) | Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. Vice Exchange. |
 
-| At | Length | Shot | Speed | Caption on screen |
-|---|---|---|---|---|
-| 0:00 | 8.6 s | title | 1x | (card) |
-| 0:08 | 22.2 s | track | 1x | (card) |
-| 0:30 | 23.9 s | how-built | 1x | (card) |
-| 0:54 | 10.7 s | city | 1x | One live room: 8 NPCs (2 witnesses, 2 informants, 2 traders, 2 police), a shared market, header badge DREX: LIVE. |
-| 1:05 | 7.0 s | two-players | 1.17x | Two human players, one authoritative server: Outlaw (left) and Hunter (right). |
-| 1:12 | 11.0 s | job | 1x | The outlaw does a job. A witness saw it: her decision card shows options, probabilities, latency and request id. |
-| 1:23 | 13.8 s | swarm-reacts | 1x | Witness to police to public bulletin: WANTED, price falls. Traders then decide on the same ticker, each from its own memory. |
-| 1:37 | 13.4 s | inspector | 1x | Agent Inspector on a police officer: private memory with provenance, the decision trace, and cited policy facts. |
-| 1:50 | 7.0 s | pursuit | 1.66x | Police set off after a dispatch delay and close in on foot (sped up). |
-| 1:57 | 8.0 s | capture | 1.19x | Captured by Sgt. Imani Duarte: the ticker goes to exactly V$0 and trading is halted. |
-| 2:05 | 6.0 s | respawn | 1.72x | Respawn: a new character and a new ticker. The old one stays listed, halted at V$0. |
-| 2:11 | 20.0 s | world-3d | 2.14x | The same server driving a 3D city client (Godot, on the MIT-licensed Open Theft Auto). Sped up. |
-| 2:31 | 18.1 s | experiment | 2.52x | This run's metrics panel: 10 NPC decisions: 10 decided by Drex, 0 low-confidence guardrail, 0 fallback. Then: scripted vs Meta LLM vs Drex on one seed (sped up). |
-| 2:49 | 5.1 s | replay | 1x | Server response: the event log replayed with no model calls matches live state (ok=true, 88 events, 0 mismatches). |
-| 2:54 | 5.6 s | end | 1x | (card) |
-
-### Narration (407 words, macOS `say`, voice Samantha)
-
-- **0:00 title**: Vice Exchange. Every outlaw is a stock, and every character decides for itself. V dollars are fictional game credits.
-- **0:08 track**: The track is Swarm Intelligence: multi agent systems. Quote: Build systems where multiple agents coordinate, compete, or negotiate, with Drex making every agent's calls. Think traders in a simulated market, N P Cs that think for themselves, or a team of agents dividing up a research task. This project is the first two at once.
-- **0:30 how-built**: How it is built. Each character has a role, a goal and a private memory. When it witnesses something or receives a message, the server makes one Drex call: a typed choice question built only from what that character knows. Drex returns a label with probabilities. The server checks it against the legal actions and applies it. The result is a message, a trade or a police move, which triggers the next agent.
-- **0:54 city**: One live room, seen by a spectator. Eight characters: two witnesses, two informants, two traders and two police. The header badge reads Drex live.
-- **1:05 two-players**: Two human players share it: an outlaw and a hunter. The server owns every position and price.
-- **1:12 job**: The outlaw does a job and the price jumps. A witness saw it first hand. Her decision card shows the options, the probabilities, the latency and the request i d.
-- **1:23 swarm-reacts**: Agents coordinate: the witness reports, police issue a public bulletin, the character is wanted, and the price falls before any capture. And they compete: each trader decides on the same ticker from its own memory.
-- **1:37 inspector**: Inspect an officer: its private memory, where each fact came from, and its decision trace. Police decisions carry facts that N D I parsed from a real San Francisco Police Department foot pursuit order.
-- **1:50 pursuit**: Officers close in. This part is sped up.
-- **1:57 capture**: Captured. The ticker goes to exactly zero and trading is halted.
-- **2:05 respawn**: The player respawns with a new ticker. The old one stays listed, halted.
-- **2:11 world-3d**: The same server also drives a three D city client, with several characters in view and their decisions above their heads.
-- **2:31 experiment**: In this run the metrics panel counts 10 decisions: 10 decided by Drex, 0 by the low confidence guardrail, and 0 by fallback. The demo director then runs one seeded scenario three ways: scripted, a Meta language model, and Drex, and reports measured latency.
-- **2:49 replay**: The event log, replayed with no model calls, matches live state.
-- **2:54 end**: Vice Exchange. A swarm that decides, and every decision on the record.
-
-Effect cues placed from the run's event log: 15.
-
-## NPC swarm cut: `demo/vice-exchange-npcs.mp4` (53.0 s, 1920x1080 H.264 + AAC stereo)
-
-| At | Length | Shot | Speed | Caption on screen |
-|---|---|---|---|---|
-| 0:00 | 10.0 s | eight-npcs | 1x | Eight NPCs in one city: witnesses, informants, traders and police, each with private memory. |
-| 0:10 | 18.0 s | swarm-decides | 1x | After a job, several NPCs decide at once. Every card in this run is a real Drex call: options, probabilities, latency. |
-| 0:28 | 11.0 s | officers-converge | 1.83x | Both officers converge on the last known location while the market reprices (sped up). |
-| 0:39 | 14.0 s | swarm-3d | 1.71x | The same swarm in the 3D city client: characters labelled by role, decisions above their heads (sped up). |
-
-### Narration (93 words, macOS `say`, voice Samantha)
-
-- **0:00 eight-npcs**: Eight characters share this city: witnesses, informants, traders and police. None of them can see what the others know.
-- **0:10 swarm-decides**: When an outlaw does a job, only the characters who saw it react. The witness decides to report. Messages cross the swarm graph, a bulletin goes out, and traders and officers each make their own call, shown as live decision cards.
-- **0:28 officers-converge**: Both officers converge on the last known location, while the market reprices around them.
-- **0:39 swarm-3d**: And the same swarm inside the three D city, with each character's role and decision floating above its head.
-
-Effect cues placed from the run's event log: 7.
-
+## NPC video shot list
+| At | Length | Shot | Speed | Caption | Narration |
+|---|---|---|---|---|---|
+| 0:00 | 8.0 s | ota-city | 1x | Nine agents in the modified Open Theft Auto city: witnesses, informants, traders, police and the fugitive Ryder. | Nine agents share this city: witnesses, informants, traders, police, and a fugitive. Every one of them decides with Drex. |
+| 0:08 | 8.0 s | ota-job | 1.5x | A job is witnessed and reported: bulletin, WANTED. | When a job is done, only the agents who saw it react. A witness reports, and a bulletin goes out. |
+| 0:16 | 12.0 s | terminal | 1.54x | Several agents decide at once. Each card shows who decided, the options, probabilities and latency. | Traders and officers each make their own call, shown live with the options and the probabilities. |
+| 0:28 | 9.0 s | ota-hunt | 1.44x | The fugitive agent stuns a human hunter; an officer captures him on a Drex decision. | The fugitive stuns a hunter. An officer runs him down, and the stock goes to zero. |
+| 0:37 | 8.0 s | ota-capture | 1.94x | The hunter stuns the next fugitive and takes the bounty. | Then the hunter takes the next one, and the bounty. |

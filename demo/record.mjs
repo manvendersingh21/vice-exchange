@@ -129,7 +129,7 @@ try {
         await walkTo(P, nick, r.x + (fire ? 0.8 : -3), r.z + (fire ? 0.8 : 3), 3, fire ? 1.6 : 4);
       }
     };
-    const watcher = (async () => { cap = await waitEvent((e) => e.type === "CAPTURE_SUCCEEDED", 75000); })();
+    const watcher = (async () => { const tc = marks.find((m) => m.name === "city").t; cap = await waitEvent((e) => e.type === "CAPTURE_SUCCEEDED" && Date.parse(e.time) >= tc + 1500, 75000); })();
     await Promise.race([Promise.all([chase(B, "Rio", true), chase(D2, "Vex", false), watcher]), watcher]);
     const cs = (await snap()).crews ?? [];
     mark("rydercap", { captured: !!cap, by: cap ? cap.payload.captorName : null, kind: cap ? cap.payload.captorKind : null, bounty: cap ? cap.payload.bounty : null, crewName: cap ? cap.payload.crewName ?? null : null, doubleCross: cap ? !!cap.payload.doubleCross : false, shares: cap ? cap.payload.shares ?? null : null, t: cap ? Date.parse(cap.time) : null, crews: cs.map((c) => [c.name, c.memberPlayerIds.length]) });

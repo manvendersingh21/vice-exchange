@@ -92,7 +92,7 @@ export const VOICE = HAVE_PIPER ? "Piper neural voice en_US-ryan-high (rhasspy/p
 /** One narration line -> loudness-normalised 48 kHz stereo WAV. Piper neural voice, or `say -v Daniel` if Piper is absent. */
 function speak(text, out) {
   const raw = out.replace(/\.wav$/, "-raw.wav");
-  if (HAVE_PIPER) execFileSync(PIPER, ["-m", PIPER_MODEL, "-f", raw, "--length-scale", "0.97", "--sentence-silence", "0.28"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
+  if (HAVE_PIPER) execFileSync(PIPER, ["-m", PIPER_MODEL, "-f", raw, "--length-scale", "0.88", "--sentence-silence", "0.28"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
   else { const a = raw.replace(/\.wav$/, ".aiff"); execFileSync("say", ["-v", "Daniel", "-r", "165", "-o", a, text.replace(/\. /g, ". [[slnc 250]] ")]); ff(["-i", a, raw]); }
   ff(["-i", raw, "-af", "loudnorm=I=-16:TP=-1.5:LRA=7,aresample=48000", "-ac", "2", out]);
 }
@@ -107,7 +107,7 @@ function build(name, segsIn) {
     s.len = Math.max(s.len, Math.ceil((s.sayLen + 0.8) * 10) / 10);
   });
   // Stay at or under 3:08: drop the least important shots first.
-  for (const drop of ["replay", "memory", "ndi", "ota-carheli"]) { if (segs.reduce((a, s) => a + s.len, 0) <= 188) break; if (name === "vice-exchange-demo") { console.log("over length, dropping", drop); segs = segs.filter((s) => s.id !== drop); } }
+  for (const drop of ["replay", "traders", "ota-carheli", "memory"]) { if (segs.reduce((a, s) => a + s.len, 0) <= 188) break; if (name === "vice-exchange-demo") { console.log("over length, dropping", drop); segs = segs.filter((s) => s.id !== drop); } }
   const done = segs.map((s, i) => seg(s, i, name));
   writeFileSync(`${WORK}/${name}-concat.txt`, done.map((d) => `file '${d.file}'`).join("\n") + "\n");
   const silent = `${WORK}/${name}-video.mp4`;
@@ -201,15 +201,19 @@ const main = [
   { id: "game", kind: "card", len: 8, png: gamePng,
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it." },
   { id: "how-built", kind: "card", len: 14, png: buildPng,
-    say: "One step of the swarm. An agent sees something, or gets a message. The server makes one Drex call, built only from what that agent knows. Drex answers with a choice and its probabilities. The server checks it is legal and applies it. That triggers the next agent." },
+    say: "One step of the swarm. An agent sees something, or gets a message. One Drex call, built only from what that agent knows, returns a choice with probabilities. The server checks it is legal, applies it, and that triggers the next agent." },
   { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 8, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker.",
     say: "Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself." },
   { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, tag: "COORDINATE", caption: "A job is witnessed and reported. Police publish a bulletin: WANTED, and the price falls.",
     say: "A job is done. A witness sees it and reports. Police put out a bulletin. The outlaw is wanted, and the price falls." },
-  inTake(tWit) && { id: "terminal-chain", cam: "C", crop: "panels", t0: Math.max(C0, tWit - 2500), t1: Math.min(T("ryder1"), (tBul ?? tWit) + 9000), len: 12, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
+  inTake(tWit) && { id: "terminal-chain", cam: "C", crop: "panels", t0: Math.max(C0, tWit - 2500), t1: Math.min(tCapR ? tCapR - 300 : T("ryder1"), (tBul ?? tWit) + 9000), len: 11, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
     say: "The trading floor terminal shows every hop. Each card is one Drex decision, with the options, the probabilities and the latency. The graph shows who told whom." },
-  !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", crop: "panels", t0: C0, t1: T("ryder1"), len: 12, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
+  !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", crop: "panels", t0: C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 10, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
     say: "The trading floor terminal shows every decision as it happens, with the options, the probabilities and the latency." },
+  has("crew0") && { id: "crew", cam: "C", crop: "panels", t0: T("crew0") + 2500, t1: Math.min(T("crew0") + 10500, tCapR ? tCapR - 300 : Infinity), len: 7, tag: "THEY TEAM UP", caption: "Two human hunters form a crew to split the bounty. The trader agents see it and each decides what to do about it.", src: "decision cards: live values from this run",
+    say: "They team up. Two human hunters form a crew to split the bounty. The traders see it, and each one decides what to do about it." },
+  tCapR && has("ryder1") && T("ryder1") - tCapR > 7000 && { id: "pnl", cam: "C", crop: "panels", t0: tCapR + 5500, t1: T("ryder1"), len: 6, tag: "AGENT P&L", caption: "After the capture: the officer is paid the bounty, the witness who reported gets a tip, and the traders mark their books.", src: "earnings shown are this run's",
+    say: "Every agent is out for its own profit. The officer earns the bounty. The witness who reported earns a tip. The traders mark their books." },
   has("insWitness", "insTrader1end") && { id: "memory", cam: "C", crop: "panels", t0: T("insWitness"), t1: T("insTrader1end"), len: 9, tag: "PRIVATE MEMORY", caption: "Each agent knows only what it saw or was told: source and hop count on every fact.",
     say: "Each agent knows only what it saw, or what it was told. Every fact carries its source and how many hands it passed through." },
   has("traders0", "traders1") && { id: "traders", cam: "C", crop: "panels", t0: T("traders0"), t1: T("traders1"), len: 8, tag: "TRADERS IN A SIMULATED MARKET", caption: "Traders in a simulated market, each deciding with Drex to grow its own V$: a new ticker lists and both trader agents decide.", src: "live values from this run",
@@ -225,7 +229,7 @@ const main = [
   has("insPolice", "insPoliceend") && { id: "ndi", cam: "C", crop: "panels", t0: T("insPolice"), t1: T("insPoliceend"), len: 7, tag: "NDI", caption: "Police decisions cite facts from a real document.", src: "SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
     say: "Police decisions cite a real San Francisco police order, parsed with N D I." },
   has("proof", "proofend") && { id: "experiment", cam: "C", crop: "bottom", t0: T("proof") + 3000, t1: T("proofend"), len: 12, tag: "EVERY CALL, COUNTED", caption: countsCap + " Then one seed, three ways: scripted, Meta LLM, Drex (sped up).", src: "numbers read from this recording's own run",
-    say: `${countsSay} Then the same seed runs three ways: scripted rules, a language model, and Drex, with measured latency.` },
+    say: `${countsSay} Then the same seed runs three ways: scripted, a language model, and Drex.` },
   has("verify") && { id: "replay", kind: "still", png: `${TAKE}/verify.png`, len: 3, caption: `The event log replayed with no model calls matches live state (ok=${M.verify.ok}, ${M.verify.events} events, ${M.verify.mismatches} mismatches).`,
     say: "And the log replays with zero model calls." },
   { id: "end", kind: "card", len: 4, png: card(["Every agent is out for its own profit. They team up, and they turn on each other.", "The longer one survives, the more it is worth, and the bigger the bounty on its head.", `Recorded from real runs · ${TESTS ? TESTS + " automated tests passing · " : ""}built on Open Theft Auto (MIT)`], "card-end"),
@@ -236,7 +240,7 @@ const npcs = [
     say: "Nine agents share this city: witnesses, informants, traders, police, and a fugitive. Every one of them decides with Drex." },
   { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, caption: "A job is witnessed and reported: bulletin, WANTED.",
     say: "When a job is done, only the agents who saw it react. A witness reports, and a bulletin goes out." },
-  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: T("ryder1"), len: 12, caption: `Several agents decide at once. ${who}`,
+  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: tCapR ? tCapR - 300 : T("ryder1"), len: 12, caption: `Several agents decide at once. ${who}`,
     say: "Traders and officers each make their own call, shown live with the options and the probabilities." },
   { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.62), len: 9, caption: "The fugitive agent stuns a human hunter; an officer captures him on a Drex decision.",
     say: "The fugitive stuns a hunter. An officer runs him down, and the stock goes to zero." },
