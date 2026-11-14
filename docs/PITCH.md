@@ -1,6 +1,6 @@
 # VICE EXCHANGE: pitch for the Swarm Intelligence track
 
-> **The game is Open Theft Auto, modified.** The city you play in is the MIT-licensed open-source Godot game Open Theft Auto (https://github.com/mehulkapadia5/open-theft-auto) with our bridge applied (`integrations/ota-bridge`): its streets, guns, cars and helicopter, populated by our Drex-driven agents and connected to our authoritative server. The browser app is the trading-floor terminal beside it: market, agent inspector, swarm graph, demo director. The browser also has its own 2D and 3D city views as a fallback.
+> **The game is our own.** VICE EXCHANGE is an original game: our own city (Coral Bay, in 2D and 3D in the browser), our own authoritative server, market, agents and rules, with nothing to install. Separately, the repo contains an optional extra client that connects the open-source, MIT-licensed project Open Theft Auto to the same server (`integrations/ota-bridge`); it is not needed to play or judge the game, and its code and assets are not included here.
 
 The track, verbatim:
 

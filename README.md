@@ -1,5 +1,6 @@
 # VICE EXCHANGE
 
+> **The game is our own.** VICE EXCHANGE is an original game: our own city (Coral Bay, in 2D and 3D in the browser), our own authoritative server, market, agents and rules, with nothing to install. Separately, the repo contains an optional extra client that connects the open-source, MIT-licensed project Open Theft Auto to the same server (`integrations/ota-bridge`); it is not needed to play or judge the game, and its code and assets are not included here.
 
 VICE EXCHANGE is a trading floor inside an original neon city, Coral Bay, where every agent thinks for itself.
 Nine agents decide with a real Nace Drex `choice` call built only from their own private memory: two witnesses, two
