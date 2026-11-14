@@ -38,14 +38,14 @@ async function browser(port, tag) {
   };
   // Watchdog: headless Chrome sometimes stops delivering screencast frames. Restart the screencast, and if it stalls
   // again fall back to a screenshot loop for this page so the take is never lost.
-  const shotLoop = async () => { while (casting && shotMode) { const r = await send("Page.captureScreenshot", { format: "jpeg", quality: 80 }); if (!casting || !r.result?.data) continue; const f = `${tag}/${String(++seq).padStart(6, "0")}.jpg`; writeFileSync(`${OUT}/${f}`, Buffer.from(r.result.data, "base64")); frames.push({ f, t: Date.now() }); lastFrame = Date.now(); } };
+  const shotLoop = async () => { while (casting && shotMode) { const r = await send("Page.captureScreenshot", { format: "jpeg", quality: 70 }); if (!casting || !r.result?.data) continue; const f = `${tag}/${String(++seq).padStart(6, "0")}.jpg`; writeFileSync(`${OUT}/${f}`, Buffer.from(r.result.data, "base64")); frames.push({ f, t: Date.now() }); lastFrame = Date.now(); } };
   setInterval(async () => {
     if (!started || shotMode || Date.now() - lastFrame < 1500) return;
     restarts++; const now = Date.now(); recent = recent.filter((t) => now - t < 12000); recent.push(now);
     if (casting) console.log("WATCHDOG", tag, "screencast stalled, restart", restarts);
     if (recent.length > 6) { console.log("WATCHDOG", tag, "switching to screenshot loop"); shotMode = true; send("Page.stopScreencast"); if (casting) shotLoop(); return; }
     lastFrame = Date.now();
-    await send("Page.stopScreencast"); await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 });
+    await send("Page.stopScreencast"); await send("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 });
   }, 400).unref();
   await send("Page.enable"); await send("Runtime.enable");
   await send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -55,7 +55,7 @@ async function browser(port, tag) {
     tag, frames, logs, send, proc: p,
     nav: (url) => send("Page.navigate", { url }),
     async cast(on) {
-      if (on && !casting) { casting = true; lastFrame = Date.now(); if (shotMode) { shotLoop(); return; } if (started) return; started = true; await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 }); }
+      if (on && !casting) { casting = true; lastFrame = Date.now(); if (shotMode) { shotLoop(); return; } if (started) return; started = true; await send("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 }); }
       else if (!on) casting = false; // the screencast keeps running; frames are acked and dropped
     },
     async hold(k, ms) { await key("rawKeyDown", k); await sleep(ms); await key("keyUp", k); },
@@ -91,6 +91,10 @@ async function walkTo(P, nick, tx, tz, maxSteps = 70, near = 1.5) {
 }
 const route = async (P, nick, pts) => { for (const [x, z] of pts) if (!(await walkTo(P, nick, x, z, 45, 2.2))) return false; return true; };
 const fpsOf = (fr, t0, t1) => { const f = fr.filter((x) => x.t >= t0 && x.t <= t1); return f.length > 1 ? Number((f.length / ((t1 - t0) / 1000)).toFixed(1)) : 0; };
+// Disk guard: stop cleanly if free space on the take volume falls under 3 GB.
+import { execFileSync as __x } from "node:child_process";
+const freeGb = () => { try { const l = __x("df", ["-k", OUT]).toString().trim().split("\n").pop().split(/\s+/); return Number(l[3]) / 1048576; } catch { return 99; } };
+setInterval(() => { const g = freeGb(); if (g < 3) { console.log("DISK GUARD: only", g.toFixed(1), "GB free, stopping"); try { save(all()); } catch {} for (const k of kids) try { k.kill(); } catch {} process.exit(3); } }, 20000).unref();
 const SHORT = !!process.env.SHORT; // dry run: stops after the capture
 const all = () => ({ framesA: A?.frames ?? [], framesB: B?.frames ?? [], framesC: C?.frames ?? [], framesD: D2?.frames ?? [] });
 

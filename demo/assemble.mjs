@@ -147,8 +147,12 @@ function build(name, segsIn) {
   const mixIn = Array.from({ length: n }, (_, k) => `[x${k}]`).join("");
   const audio = `${WORK}/${name}-audio.m4a`;
   ff([...ins, "-filter_complex", `${parts.join(";")};${mixIn}amix=inputs=${n}:normalize=0:duration=first,alimiter=limit=0.95[out]`, "-map", "[out]", "-t", total.toFixed(2), "-c:a", "aac", "-b:a", "160k", "-ac", "2", audio]);
-  const final = `${REPO}/demo/${name}.mp4`;
-  ff(["-i", silent, "-i", audio, "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", "-shortest", final]);
+  // Build to a temp name inside WORK and move into demo/ only when complete, so the good copy is never truncated.
+  const final = `${REPO}/demo/${name}.mp4`, tmpFinal = `${WORK}/${name}.final.mp4`;
+  ff(["-i", silent, "-i", audio, "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", "-shortest", tmpFinal]);
+  if (!(dur(tmpFinal) > 20)) throw new Error("assembled file too short, keeping the existing copy");
+  if (process.env.OUTDIR) { execFileSync("cp", [tmpFinal, `${process.env.OUTDIR}/${name}.mp4`]); return tmpFinal; }
+  execFileSync("mv", ["-f", tmpFinal, final]);
   const table = segs.map((s, i) => ({ at: offs[i], len: done[i].len, id: s.id, speed: Number(done[i].speed.toFixed(2)), caption: s.caption ?? "(card)", say: s.say ?? "" }));
   writeFileSync(`${WORK}/${name}-shots.json`, JSON.stringify({ total, cues: cues.length, table }, null, 1));
   console.log(name, "duration", dur(final).toFixed(2), "segments", table.map((t) => `${t.id}@${t.at.toFixed(1)}x${t.speed}`).join(" "));
