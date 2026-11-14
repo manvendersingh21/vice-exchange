@@ -56,8 +56,10 @@ export class RoomManager {
 
   private secretOk(given: string | undefined): boolean {
     const want = this.opts.directorSecret;
-    if (!want || !given || given.length !== want.length) return false;
-    return timingSafeEqual(Buffer.from(given), Buffer.from(want));
+    if (!want || !given) return false;
+    // Compare bytes, not characters: a multi-byte character of the same character count must not throw.
+    const a = Buffer.from(given), b = Buffer.from(want);
+    return a.length === b.length && timingSafeEqual(a, b);
   }
 
   /** Nicknames are unique per room: a taken name gets the smallest free numeric suffix (Ace -> Ace2). */
@@ -113,7 +115,11 @@ export class RoomManager {
         return done(byToken.id);
       }
       const name = cmd.nickname.toLowerCase();
-      const claim = humans.find((p) => !p.connected && p.role === cmd.role && p.nickname.toLowerCase() === name);
+      // A nickname alone reclaims a disconnected player only once the owner's own automatic token reconnect has had its
+      // grace window (so a stranger cannot grab a character during a network blip). This machine's own browser and the
+      // director secret may reclaim at once: that is the presenter reopening a tab.
+      const graceOver = (p: PlayerState) => engine.now() - (p.disconnectedAtMs ?? 0) > RULES.reconnectGraceMs;
+      const claim = humans.find((p) => !p.connected && p.role === cmd.role && p.nickname.toLowerCase() === name && (local || secret || graceOver(p)));
       if (claim) {
         engine.reattach(claim.id, socketId, { sessionToken: randomBytes(24).toString("hex"), isDirector: secret });
         return done(claim.id);

@@ -524,14 +524,14 @@ export class RoomEngine implements WorldPort {
   private settleOrder(o: { walletId: string; actorId: string; actorName: string; actorKind: "HUMAN" | "NPC"; ticker: string; side: TradeSide; commandId: string }, opts: EmitOpts): OrderResult {
     const s = this.state; const now = this.now();
     const tradeId = `trd_${pad((s.counters.trd ?? 0) + 1, 4)}`;
-    const before = s.trades.length;
     const r = this.deps.economy.executeOrder(s, { ...o, qty: RULES.trade.qtyPerOrder, tradeId }, now);
     if (!r.ok) {
       this.emit("TRADE_REJECTED", o.actorId, { commandId: o.commandId, walletId: o.walletId, actorId: o.actorId, actorKind: o.actorKind, ticker: o.ticker, side: o.side, qty: RULES.trade.qtyPerOrder, reason: r.reason }, opts);
       return r;
     }
     s.counters.trd = (s.counters.trd ?? 0) + 1;
-    if (s.trades.length === before) s.trades.push(r.trade);
+    // The economy records the trade itself; test the id (not the length, which stops growing once the list is capped).
+    if (s.trades[s.trades.length - 1]?.tradeId !== r.trade.tradeId) s.trades.push(r.trade);
     if (s.trades.length > 200) s.trades.splice(0, s.trades.length - 200);
     const subject = s.listings[o.ticker]?.characterId;
     const correlationId = opts.correlationId ?? (subject ? this.storyOf.get(subject) : undefined) ?? this.nextId("story");

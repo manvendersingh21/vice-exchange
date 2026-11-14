@@ -56,6 +56,8 @@ export class ExperimentRunner {
       if (timer) clearInterval(timer);
       result.rows = lanes.map((l) => row(l.mode, l.room, startedAtMs));
       result.status = status; result.finishedAtMs = Date.now();
+      // Report the measured length: a run ends early once every lane has been captured.
+      result.durationSec = Math.max(1, Math.round((result.finishedAtMs - startedAtMs) / 1000));
       for (const l of lanes) l.room.scheduler.cancelAll();
       this.running = false;
       try { this.persistence.saveExperiment(result); } catch (err) { console.error("[experiment] save failed", (err as Error).message); }

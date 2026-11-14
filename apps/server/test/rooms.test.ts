@@ -220,3 +220,37 @@ describe("audit fixes", () => {
     expect(make(3, false, "s3cret-director-token").error?.code).toBe("INTERNAL");
   });
 });
+
+// Audit findings (engine and security reviewers), 2026-11-14.
+describe("audit: reclaim and secret handling", () => {
+  it("a stranger on the LAN cannot take a disconnected player's character during the owner's reconnect grace window", () => {
+    const { room, clock, join } = setup();
+    const ace = join("Ace", "OUTLAW", { socketId: "sock-ace" });
+    room.engine.disconnect(ace.playerId);
+    clock.advance(150); // a network blip
+    const stranger = join("ace", "OUTLAW", { local: false, socketId: "sock-evil" });
+    expect(stranger.playerId).not.toBe(ace.playerId);
+    expect(stranger.characterId).not.toBe(ace.characterId);
+    // The owner's own token still re-attaches to the original player and character.
+    const back = join("Ace", "OUTLAW", { sessionToken: ace.sessionToken, socketId: "sock-ace-2", local: false });
+    expect(back.playerId).toBe(ace.playerId);
+    expect(back.characterId).toBe(ace.characterId);
+  });
+
+  it("after the grace window a nickname reclaim from elsewhere works, and this machine's own browser may reclaim at once", () => {
+    const { room, clock, join } = setup();
+    const ace = join("Ace", "OUTLAW", { socketId: "sock-ace" });
+    room.engine.disconnect(ace.playerId);
+    clock.advance(1000);
+    expect(join("Ace", "OUTLAW", { local: true, socketId: "sock-ace-tab2" }).playerId).toBe(ace.playerId); // presenter reopens a tab
+    room.engine.disconnect(ace.playerId);
+    clock.advance(RULES.reconnectGraceMs + 1000);
+    expect(join("Ace", "OUTLAW", { local: false, socketId: "sock-lan" }).playerId).toBe(ace.playerId);
+  });
+
+  it("a director secret with a multi-byte character of the same length is refused without throwing", () => {
+    const { join } = setup("abcdefghijkl");
+    const r = join("Zed", "SPECTATOR", { directorSecret: "abcdefghijké", local: false });
+    expect(r.isDirector).toBe(false);
+  });
+});
