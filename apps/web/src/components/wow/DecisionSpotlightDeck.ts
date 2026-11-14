@@ -241,7 +241,7 @@ export function createDeck(init: { capacity: number; dwellMs: number; exitMs: nu
         const trace = traceFor(st, p.agentId, p.decisionId);
         const t = triggerInfo(st, p.triggerEventId ?? e.causationId, p.agentId);
         admit({
-          id: p.decisionId, agentId: p.agentId, role: p.role, name: st.npcs[p.agentId]?.name ?? p.agentId,
+          id: p.decisionId, agentId: p.agentId, role: p.role, name: st.npcs[p.agentId]?.name ?? st.characters?.[p.agentId]?.nickname ?? p.agentId,
           mode: p.mode ?? null, labels: [...(p.offeredActions ?? [])], seq: e.serverSequence,
           why: t.why, knows: knowsFromTrace(trace) ?? t.knows, bornAt: now, phase: "thinking",
           res: null, trace, outcome: null, lost: false,
@@ -264,7 +264,7 @@ export function createDeck(init: { capacity: number; dwellMs: number; exitMs: nu
         const trace = traceFor(st, p.agentId, p.decisionId);
         const t = triggerInfo(st, e.causationId, p.agentId);
         admit({
-          id: p.decisionId, agentId: p.agentId, role: p.role, name: st.npcs[p.agentId]?.name ?? p.agentId,
+          id: p.decisionId, agentId: p.agentId, role: p.role, name: st.npcs[p.agentId]?.name ?? st.characters?.[p.agentId]?.nickname ?? p.agentId,
           mode: null, labels: [...(p.offeredActions ?? [])], seq: e.serverSequence,
           why: t.why, knows: knowsFromTrace(trace) ?? t.knows, bornAt: now, phase: "resolved",
           res, trace, outcome: null, lost: false,

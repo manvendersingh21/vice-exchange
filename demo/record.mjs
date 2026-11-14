@@ -21,13 +21,14 @@ async function browser(port, tag) {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/json/version`)).ok) break; } catch {} await sleep(250); }
   const t = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
-  let id = 0; const pending = new Map(); const frames = []; let seq = 0; let casting = false; const logs = []; let lastFrame = 0; let shotMode = false; let restarts = 0;
+  let id = 0; const pending = new Map(); const frames = []; let seq = 0; let casting = false; const logs = []; let lastFrame = 0; let shotMode = false; let restarts = 0; let started = false; let recent = [];
   const send = (method, params = {}) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
   ws.onmessage = (m) => {
     const d = JSON.parse(m.data);
     if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); return; }
     if (d.method === "Page.screencastFrame") {
       send("Page.screencastFrameAck", { sessionId: d.params.sessionId });
+      lastFrame = Date.now();
       if (!casting) return;
       const f = `${tag}/${String(++seq).padStart(6, "0")}.jpg`;
       writeFileSync(`${OUT}/${f}`, Buffer.from(d.params.data, "base64"));
@@ -39,11 +40,12 @@ async function browser(port, tag) {
   // again fall back to a screenshot loop for this page so the take is never lost.
   const shotLoop = async () => { while (casting && shotMode) { const r = await send("Page.captureScreenshot", { format: "jpeg", quality: 80 }); if (!casting || !r.result?.data) continue; const f = `${tag}/${String(++seq).padStart(6, "0")}.jpg`; writeFileSync(`${OUT}/${f}`, Buffer.from(r.result.data, "base64")); frames.push({ f, t: Date.now() }); lastFrame = Date.now(); } };
   setInterval(async () => {
-    if (!casting || shotMode || Date.now() - lastFrame < 700) return;
-    restarts++; console.log("WATCHDOG", tag, "screencast stalled, restart", restarts);
-    if (restarts > 2) { shotMode = true; send("Page.stopScreencast"); shotLoop(); return; }
+    if (!started || shotMode || Date.now() - lastFrame < 1500) return;
+    restarts++; const now = Date.now(); recent = recent.filter((t) => now - t < 12000); recent.push(now);
+    if (casting) console.log("WATCHDOG", tag, "screencast stalled, restart", restarts);
+    if (recent.length > 6) { console.log("WATCHDOG", tag, "switching to screenshot loop"); shotMode = true; send("Page.stopScreencast"); if (casting) shotLoop(); return; }
     lastFrame = Date.now();
-    await send("Page.stopScreencast"); await send("Page.bringToFront"); await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 });
+    await send("Page.stopScreencast"); await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 });
   }, 400).unref();
   await send("Page.enable"); await send("Runtime.enable");
   await send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -53,8 +55,8 @@ async function browser(port, tag) {
     tag, frames, logs, send, proc: p,
     nav: (url) => send("Page.navigate", { url }),
     async cast(on) {
-      if (on && !casting) { casting = true; lastFrame = Date.now(); if (shotMode) { shotLoop(); return; } await send("Page.bringToFront"); await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 }); }
-      else if (!on && casting) { casting = false; await send("Page.stopScreencast"); }
+      if (on && !casting) { casting = true; lastFrame = Date.now(); if (shotMode) { shotLoop(); return; } if (started) return; started = true; await send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 900, everyNthFrame: 1 }); }
+      else if (!on) casting = false; // the screencast keeps running; frames are acked and dropped
     },
     async hold(k, ms) { await key("rawKeyDown", k); await sleep(ms); await key("keyUp", k); },
     async press(k) { await key("rawKeyDown", k); await sleep(70); await key("keyUp", k); },
@@ -93,116 +95,130 @@ const SHORT = !!process.env.SHORT; // dry run: stops after the capture
 const all = () => ({ framesA: A?.frames ?? [], framesB: B?.frames ?? [], framesC: C?.frames ?? [], framesD: D2?.frames ?? [] });
 
 let A, B, C, D2;
+const evlog = async () => (await (await fetch(`${API}/api/rooms/VICE-42/events?limit=1000`)).json()).events;
+const traders = (s) => s.npcs.filter((n) => n.role === "TRADER").map((n) => ({ name: n.name, credits: n.walletCredits, holdings: n.holdings }));
+const waitEvent = async (pred, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const e = (await evlog()).find(pred); if (e) return e; await sleep(400); } return null; };
 try {
+  // ---- Part 1: agent versus agent, seen by a spectator. The fugitive "Ryder" is itself a Drex-driven agent. ----
+  C = await browser(9443, "C");
+  await C.nav(`${BASE}/?nick=Judge&role=SPECTATOR&room=VICE-42&auto=1&view=2d`);
+  await sleep(3500);
   let s = await snap();
   const ryder = s.characters.find((c) => /^Ryder/i.test(c.nickname) && c.role === "OUTLAW");
+  await C.cast(true);
+  mark("city", { ryder: ryder ? ryder.ticker : null, traders: traders(s) });
+  await sleep(4000);
+  if (ryder) {
+    const cap = await waitEvent((e) => e.type === "CAPTURE_SUCCEEDED", 75000);
+    mark("rydercap", { captured: !!cap, by: cap ? cap.payload.captorName : null, t: cap ? Date.parse(cap.time) : null });
+    await sleep(6500);
+  } else await sleep(8000);
+  s = await snap();
+  mark("ryder1", { traders: traders(s), trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]), listings: s.listings.map((l) => [l.ticker, l.status, l.spotPrice]) });
+  // Inspector on the spectator page: what each agent knows and where it came from.
+  const inspect = async (re, name, scroll) => {
+    const chip = await C.clickText(re, "button.chip"); mark(name, { chip });
+    await sleep(scroll ? 2600 : 4200);
+    if (scroll) { await C.js(`(()=>{const el=[...document.querySelectorAll('*')].filter(e=>e.scrollHeight>e.clientHeight+40&&getComputedStyle(e).overflowY!=='visible'&&e.closest('.inspector, [class*=inspect], [class*=agent]'));const t=el[el.length-1];if(t){t.scrollBy({top:260,behavior:'smooth'});return t.className}return null})()`); await sleep(3200); }
+    mark(name + "end"); await C.clickText(re, "button.chip");
+  };
+  await inspect("/Vega/", "insWitness");
+  await inspect("/Castellan/", "insTrader1");
+  await inspect("/Halvorsen/", "insTrader2");
+  await inspect("/Duarte/", "insPolice", true);
+  // Traders deciding on a fresh listing (the fugitive's respawn opens a new ticker): cards, trade feed, chart.
+  mark("traders0");
+  const relist = ryder ? await waitEvent((e) => e.type === "LISTING_OPENED" && Date.parse(e.time) > marks.find((m) => m.name === "ryder1").t - 8000, 20000) : null;
+  await sleep(relist ? 7000 : 2000);
+  s = await snap();
+  mark("traders1", { relist: relist ? relist.payload.ticker : null, traders: traders(s), trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]) });
+  await C.cast(false);
+  save(all());
+  if (process.env.HUMANS) {
+  // ---- Part 2: humans. An outlaw and a crew of two hunters. ----
   A = await browser(9441, "A");
   await A.nav(`${BASE}/?nick=Ace&role=OUTLAW&room=VICE-42&auto=1&view=3d`);
-  await sleep(6000);
-  C = await browser(9443, "C");
-  await C.nav(`${BASE}/?nick=Judge&role=SPECTATOR&room=VICE-42&auto=1&view=3d`);
-  await sleep(6000);
-  // Shot: the whole city from the spectator's orbit camera (many labelled NPCs in frame).
-  await C.cast(true);
-  mark("city", { ryder: ryder ? ryder.ticker : null });
-  await C.drag(500, 300, 760, 330, 5000);
-  await sleep(1500);
-  await C.cast(false);
-  // Two hunters join as one crew. Both pages are driven; only B is recorded.
   B = await browser(9442, "B");
   await B.nav(`${BASE}/?nick=Rio&role=HUNTER&room=VICE-42&auto=1&view=3d&crew=WOLF`);
-  await sleep(6000);
   D2 = await browser(9444, "D");
-  await D2.nav(`${BASE}/?nick=Vex&role=HUNTER&room=VICE-42&auto=1&view=3d&crew=WOLF`);
-  await sleep(6000);
+  await D2.nav(`${BASE}/?nick=Vex&role=HUNTER&room=VICE-42&auto=1&view=2d&crew=WOLF`);
+  await sleep(7500);
   s = await snap();
-  mark("crewinfo", { crews: (s.crews ?? []).map((c) => [c.name, c.memberPlayerIds.length]), hunters: s.characters.filter((c) => c.role === "HUNTER").map((c) => [c.nickname, Math.round(c.x), Math.round(c.z), c.crewName ?? null]) });
+  mark("crewinfo", { crews: (s.crews ?? []).map((c) => [c.name, c.memberPlayerIds.length]), who: s.characters.filter((c) => ["Ace", "Rio", "Vex"].includes(c.nickname)).map((c) => [c.nickname, Math.round(c.x), Math.round(c.z), c.crewName ?? null]) });
   await A.cast(true); await B.cast(true);
   mark("two");
   await Promise.all([
-    (async () => { await A.hold("d", 900); await sleep(400); await A.hold("a", 900); await sleep(400); await A.hold("w", 500); await sleep(300); await A.hold("s", 500); })(),
+    (async () => { await A.hold("d", 800); await sleep(400); await A.hold("a", 800); await sleep(300); await A.drag(520, 330, 640, 310, 1200); })(),
     (async () => { await B.hold("s", 1300); await sleep(400); await B.hold("a", 900); await sleep(300); await B.hold("d", 900); })(),
   ]);
-  await sleep(1200);
+  await sleep(800);
   mark("twoend");
   await B.cast(false);
-  // Hunters walk to a staging point south-east of the dock (unrecorded on their pages; A keeps recording).
-  const hx = live(await snap(), "Rio");
-  const legs = hx && hx.z < 40 ? [[hx.x, 54], [61, 55], [61, 66]] : [[61, 55], [61, 66]];
-  const staged = await Promise.all([route(B, "Rio", legs), (async () => { await sleep(1200); return route(D2, "Vex", [...legs.slice(0, -1), [64, 64]]); })()]);
-  mark("staged", { staged });
-  // Shot: the job, from the outlaw's own page, chase camera.
-  s = await snap();
-  const m = s.missions.find((x) => x.status === "AVAILABLE");
-  mark("job", { mission: [m.x, m.z], priceBefore: s.listings.find((l) => l.status === "ACTIVE" && /^ACE/.test(l.ticker))?.spotPrice });
-  const reached = await walkTo(A, "Ace", m.x, m.z);
-  await A.press("e");
-  mark("jobdone", { reached });
-  save(all());
-  await sleep(4500);
-  // Shot: the hunt. The outlaw fires (seen by NPCs -> Drex cards), hunters close in, stun, capture.
-  await B.cast(true);
-  mark("hunt0");
-  await A.press("f");
-  mark("outlawshot");
-  await sleep(3500);
-  await A.press("c"); // high-angle preset: more of the street and the NPCs in frame while cards resolve
-  await sleep(3500);
+  await A.press("v");
+  console.log("B to 2D:", await B.clickText("/^2D$/"));
   let ace = live(await snap(), "Ace");
-  if (ace && !ace.wanted) { await A.press("f"); await sleep(2600); await A.press("f"); await sleep(2200); ace = live(await snap(), "Ace"); }
+  const staged = await Promise.all([
+    route(B, "Rio", [[92, 54], [61, 54.5], [61, 65]]),
+    route(D2, "Vex", [[4, 54], [40, 54.5], [42, 66]]),
+  ]);
+  mark("staged", { staged });
+  // The hunt. The outlaw fires: each shot adds heat and is a sighting the NPCs who saw it decide on.
+  mark("hunt0");
+  for (let i = 0; i < 5; i++) {
+    await A.press("f"); mark("outlawshot", { i });
+    await sleep(2700);
+    if (i === 0) await A.press("c");
+    ace = live(await snap(), "Ace");
+    if (!ace || ace.wanted) break;
+  }
   mark("wanted", { wanted: !!ace?.wanted, heat: ace?.heat });
-  await A.press("c"); await sleep(250); await A.press("c"); await sleep(250); await A.press("c"); // back to chase
-  // Hunters approach from the south so the outlaw is in front of their chase cameras.
-  if (ace) await Promise.all([walkTo(B, "Rio", ace.x, ace.z + 7, 30, 2.5), (async () => { await sleep(600); return walkTo(D2, "Vex", ace.x + 6, ace.z + 9, 30, 3.5); })()]);
+  await A.press("v");
+  if (ace) await Promise.all([walkTo(B, "Rio", ace.x + 3, ace.z + 2, 30, 2.6), walkTo(D2, "Vex", ace.x - 5, ace.z + 4, 30, 4)]);
   let captured = false;
   for (let i = 0; i < 6 && !captured; i++) {
     await B.press("f"); mark("huntershot", { i });
-    await sleep(700);
+    await sleep(600);
     ace = live(await snap(), "Ace");
-    if (ace) { const h = live(await snap(), "Rio"); if (h && Math.hypot(h.x - ace.x, h.z - ace.z) > 2.2) await walkTo(B, "Rio", ace.x, ace.z + 1.2, 10, 1.9); }
+    if (ace) { const h = live(await snap(), "Rio"); if (h && Math.hypot(h.x - ace.x, h.z - ace.z) > 2.1) await walkTo(B, "Rio", ace.x + 1, ace.z + 0.8, 10, 1.8); }
     await B.press("e");
     await sleep(600);
     s = await snap();
     captured = s.characters.some((c) => c.nickname === "Ace" && c.status === "CAPTURED");
-    if (!captured) await sleep(1900);
+    if (!captured) await sleep(1700);
   }
   const t0 = Date.now();
-  while (!captured && Date.now() - t0 < 45000) { s = await snap(); captured = s.characters.some((c) => c.nickname === "Ace" && c.status === "CAPTURED"); await sleep(300); }
+  while (!captured && Date.now() - t0 < 40000) { s = await snap(); captured = s.characters.some((c) => c.nickname === "Ace" && c.status === "CAPTURED"); await sleep(300); }
   s = await snap();
-  const capEv = s.recentEvents.filter((e) => e.type === "CAPTURE_SUCCEEDED").pop();
-  mark("crash", { captured, listing: s.listings.map((l) => [l.ticker, l.status, l.spotPrice]), by: capEv ? [[capEv.payload.captorName, capEv.payload.bounty, capEv.payload.survivalSeconds]] : [], crew: capEv ? { crewName: capEv.payload.crewName ?? null, doubleCross: !!capEv.payload.doubleCross, payouts: capEv.payload.payouts ?? capEv.payload.shares ?? null, captorKind: capEv.payload.captorKind } : null,
-    weapon: s.recentEvents.filter((e) => e.type === "WEAPON_FIRED" || e.type === "STUNNED").map((e) => [e.type, e.payload.shooterKind ?? e.payload.targetKind, e.payload.hitKind ?? null]) });
+  const capEv = s.recentEvents.filter((e) => e.type === "CAPTURE_SUCCEEDED" && e.payload.ticker && /^ACE/.test(e.payload.ticker)).pop();
+  mark("crash", { captured, t: capEv ? Date.parse(capEv.time) : null, by: capEv ? [[capEv.payload.captorName, capEv.payload.bounty, capEv.payload.survivalSeconds]] : [],
+    crew: capEv ? { crewName: capEv.payload.crewName ?? null, doubleCross: !!capEv.payload.doubleCross, shares: capEv.payload.shares ?? null, captorKind: capEv.payload.captorKind } : null });
   mark("hunt1");
   save(all());
   await sleep(7500);
-  await B.cast(false);
   mark("halted");
   if (SHORT) throw new Error("short run end");
   B.close(); D2.close();
   const rej = await A.clickText("/BUY 1/");
   mark("rejected", { clicked: rej });
-  await sleep(3000);
+  await sleep(2500);
   mark("respawn");
   await A.press("r");
   await sleep(1500);
-  await A.press("v");
   await A.hold("w", 900); await sleep(300); await A.hold("d", 900);
-  await sleep(3000);
-  mark("respawnend");
-  // Inspector on the SPECTATOR page: an officer's memory, decision trace and policy citations.
-  await C.cast(true);
-  const chip = await C.clickText("/Duarte/", "button.chip");
-  mark("inspect", { chip });
-  await sleep(4000);
-  await C.js(`(()=>{const el=[...document.querySelectorAll('*')].filter(e=>e.scrollHeight>e.clientHeight+40&&getComputedStyle(e).overflowY!=='visible'&&e.closest('.inspector, [class*=inspect], [class*=agent]'));const t=el[el.length-1];if(t){t.scrollBy({top:260,behavior:'smooth'});return t.className}return null})()`);
-  await sleep(4500);
-  mark("inspectend");
-  await C.cast(false);
-  s = await snap();
-  mark("proof", { listings: s.listings.map((l) => [l.ticker, l.status, l.spotPrice]), metrics: s.metrics.decisions, latency: s.metrics.latency, shadow: s.metrics.shadow, trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]) });
-  await A.clickText("/DEMO DIRECTOR/");
   await sleep(2500);
-  const exp = await A.clickText("/Run scripted/");
+  mark("respawnend");
+  await A.cast(false);
+  A.close();
+  }
+  // ---- Part 3: proof, on the spectator page (first local browser, so it holds the director controls). ----
+  s = await snap();
+  await C.cast(true);
+  mark("proof", { listings: s.listings.map((l) => [l.ticker, l.status, l.spotPrice]), metrics: s.metrics.decisions, latency: s.metrics.latency, shadow: s.metrics.shadow, traders: traders(s), trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]) });
+  await C.clickText("/DEMO DIRECTOR/");
+  await sleep(800);
+  console.log("larger:", await C.clickText("/larger/"));
+  await sleep(1700);
+  const exp = await C.clickText("/Run scripted/");
   console.log("experiment button:", exp);
   const t1 = Date.now(); let done = null;
   while (exp && Date.now() - t1 < 60000) {
@@ -212,10 +228,10 @@ try {
   }
   mark("expdone", { rows: done?.rows?.map((r) => ({ mode: r.mode, calls: r.realProviderCalls, p50: r.latencyP50Ms, p95: r.latencyP95Ms, trades: r.npcTrades, captured: r.captured })) });
   await sleep(1500);
-  await A.js(`(()=>{const el=[...document.querySelectorAll('*')].filter(e=>e.scrollHeight>e.clientHeight+30&&getComputedStyle(e).overflowY!=='visible'&&e.querySelector('.exp-head'));const t=el[el.length-1];if(t){const h=t.querySelector('.exp-head');h.scrollIntoView({block:'start',behavior:'smooth'});return t.className}return null})()`);
-  await sleep(5500);
+  await C.js(`(()=>{const el=[...document.querySelectorAll('*')].filter(e=>e.scrollHeight>e.clientHeight+30&&getComputedStyle(e).overflowY!=='visible'&&e.querySelector('.exp-head'));const t=el[el.length-1];if(t){const h=t.querySelector('.exp-head');h.scrollIntoView({block:'start',behavior:'smooth'});return t.className}return null})()`);
+  await sleep(5000);
   mark("proofend");
-  await A.cast(false);
+  await C.cast(false);
   await C.send("Emulation.setDeviceMetricsOverride", { width: 800, height: 450, deviceScaleFactor: 2, mobile: false });
   await C.nav(`${API}/api/rooms/VICE-42/replay/verify`);
   await sleep(1500);
@@ -228,9 +244,9 @@ finally {
   try {
     const evs = await (await fetch(`${API}/api/rooms/VICE-42/events?limit=1000`)).json();
     const T = Object.fromEntries(marks.map((m) => [m.name, m.t]));
-    const rates = { city: C && T.city ? fpsOf(C.frames, T.city, T.city + 6500) : 0, two_A: T.two && T.twoend ? fpsOf(A.frames, T.two, T.twoend) : 0, two_B: T.two && T.twoend ? fpsOf(B.frames, T.two, T.twoend) : 0, job_A: T.job && T.hunt0 ? fpsOf(A.frames, T.job, T.hunt0) : 0, hunt_A: T.hunt0 && T.hunt1 ? fpsOf(A.frames, T.hunt0, T.hunt1) : 0, crash_A: T.hunt1 && T.halted ? fpsOf(A.frames, T.hunt1, T.halted) : 0 };
+    const rates = { ryder_chain_C: T.city && T.ryder1 ? fpsOf(C.frames, T.city, T.ryder1) : 0, two_A: A && T.two && T.twoend ? fpsOf(A.frames, T.two, T.twoend) : 0, two_B: B && T.two && T.twoend ? fpsOf(B.frames, T.two, T.twoend) : 0, hunt_A: A && T.hunt0 && T.hunt1 ? fpsOf(A.frames, T.hunt0, T.hunt1) : 0, crash_A: A && T.hunt1 && T.halted ? fpsOf(A.frames, T.hunt1, T.halted) : 0, proof_C: T.proof && T.proofend ? fpsOf(C.frames, T.proof, T.proofend) : 0 };
     console.log("CAPTURE FPS", JSON.stringify(rates));
-    save({ ...all(), rates, events: evs.events.map((e) => ({ type: e.type, t: Date.parse(e.time), actor: e.actorId, p: e.type === "DECISION_RESOLVED" ? { src: e.payload.decisionSource, role: e.payload.role, action: e.payload.chosenAction, ms: e.payload.latencyMs } : ["TRADE_REJECTED", "WEAPON_FIRED", "STUNNED", "CAPTURE_SUCCEEDED", "CREW_JOINED", "CREW_BETRAYED", "CREW_TIP", "OUTLAW_WARNED"].includes(e.type) ? e.payload : undefined })), logsA: A?.logs, logsB: B?.logs, logsC: C?.logs });
+    save({ ...all(), rates, events: evs.events.map((e) => ({ type: e.type, t: Date.parse(e.time), actor: e.actorId, p: e.type === "DECISION_RESOLVED" ? { src: e.payload.decisionSource, role: e.payload.role, action: e.payload.chosenAction, ms: e.payload.latencyMs, agent: e.payload.agentId } : e.type === "MISSION_COMPLETED" ? { ticker: e.payload.ticker } : e.type === "LISTING_OPENED" ? { ticker: e.payload.ticker } : ["TRADE_REJECTED", "WEAPON_FIRED", "STUNNED", "CAPTURE_SUCCEEDED", "CREW_JOINED", "CREW_BETRAYED", "CREW_TIP", "OUTLAW_WARNED"].includes(e.type) ? e.payload : undefined })), logsA: A?.logs, logsB: B?.logs, logsC: C?.logs });
   } catch (e) { console.error("SAVE ERROR", String(e)); try { save(all()); } catch {} }
   for (const k of kids) { try { k.kill(); } catch {} }
   process.exit(0);

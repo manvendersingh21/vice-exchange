@@ -283,7 +283,7 @@ export function CanvasCity(props: CityViewProps) {
         if (selected === c.id) { ctx.strokeStyle = "#ffffff"; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, r + 10, 0, Math.PI * 2); ctx.stroke(); }
         ctx.restore();
         text(c.role === "OUTLAW" ? "O" : "H", x, y + 0.5, "#0b0720", "800 10px ui-sans-serif, system-ui, sans-serif");
-        const tag = captured ? `${c.nickname} · CAPTURED` : `${c.nickname}${c.crewName ? ` [${c.crewName}]` : ""}${isYou ? " (you)" : ""}`;
+        const tag = captured ? `${c.nickname} · CAPTURED` : `${c.agent ? `${c.nickname.toUpperCase()} · AGENT` : c.nickname}${c.crewName ? ` [${c.crewName}]` : ""}${isYou ? " (you)" : ""}`;
         text(tag, x, y - r - 20, captured ? "#8d8aa6" : "#ffffff");
         if (c.ticker) text(captured ? `${c.ticker} V$0` : status === "WANTED" ? `${c.ticker} · WANTED` : c.ticker, x, y - r - 8, status === "WANTED" ? "#ff4d6d" : "#5dfdcb");
         if (!isYou && youPos && you?.role === "HUNTER" && status === "WANTED" && Math.hypot(youPos.x - p.x, youPos.z - p.z) <= RULES.captureRadius)

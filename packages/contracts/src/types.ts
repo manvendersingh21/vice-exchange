@@ -127,6 +127,8 @@ export interface PlayerView { id: EntityId; nickname: string; role: HumanRole; c
 
 export interface CharacterView {
   id: EntityId; playerId: EntityId; nickname: string; role: CharacterRole;
+  /** Present when this character is driven by an autonomous agent, not a human. */
+  agent?: { kind: "FUGITIVE" };
   /** Only outlaws are listed; hunters have no ticker. */
   ticker: string | null;
   status: CharacterStatus; x: number; z: number;

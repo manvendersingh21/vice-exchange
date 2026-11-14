@@ -56,6 +56,7 @@ var win_size := Vector2i(1600, 900)
 var linger := 0.0               # check mode: stay connected this many seconds before quitting
 var want_mode := ""             # room creator only: ask the server for drex | meta | scripted
 var hunt := false               # check mode, HUNTER: shadow the outlaw and capture once it is wanted
+var _hunt_last_shot := 0.0
 var wait_before := 0.0          # check mode, OUTLAW: seconds to wait before walking to the job
 var keep_city_hud := false      # --vice-keep-hud: leave the city's own single-player HUD on screen
 var look := "neon"              # --vice-look=neon | plain  (plain keeps the city's stock lighting)
@@ -815,7 +816,10 @@ func _sync_entities() -> void:
 		if tk != null:
 			for l in state.get("listings", []):
 				if str(l.get("ticker", "")) == str(tk): price = "  V$%d" % int(l.get("spotPrice", 0))
-		ce.base = "%s%s\n%s" % [str(c.get("nickname", cid)), ("  " + str(tk) + price) if tk != null else "", str(c.get("role", ""))]
+		if str(c.get("nickname", "")).to_lower() == "ryder":
+			ce.base = "RYDER · AGENT · %s%s\nDREX-DRIVEN FUGITIVE" % [str(tk) if tk != null else "", price]
+		else:
+			ce.base = "%s%s\n%s" % [str(c.get("nickname", cid)), ("  " + str(tk) + price) if tk != null else "", str(c.get("role", ""))]
 		ce.extra = "WANTED" if bool(c.get("wanted", false)) else ""
 		ce.heat = float(c.get("heat", 0.0))
 		ce.status = st
@@ -1797,6 +1801,15 @@ func _run_check() -> void:
 			_check_started_at = _now()
 		elif target_id != "" and entities.has(target_id):
 			var ts: Vector2 = entities[target_id].sim
+			var gdist: float = my_sim_pos().distance_to(ts)
+			if guns and gdist < 12.0 and gdist > 3.0 and _now() - _hunt_last_shot > 4.0:
+				for o2 in state.get("characters", []):
+					if str(o2.get("id", "")) == target_id and bool(o2.get("wanted", false)):
+						_hunt_last_shot = _now()
+						var gc := sim_to_city(ts.x, ts.y)
+						var gd := Vector2(gc.x - game.player_pos.x, gc.y - game.player_pos.z)
+						game.cam_yaw = atan2(-gd.x, -gd.y)
+						fire_dir(gd.normalized())
 			if _prompt_action == "capture":
 				if _now() - _last_capture_try > 1.6:
 					_last_capture_try = _now()

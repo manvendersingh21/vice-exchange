@@ -100,6 +100,8 @@ export class FugitiveAgent {
     if (seen.length) options.flee = "Run from the nearest pursuer I can see. Right when one is closing in and I cannot or should not stun them";
     if (inRange.length && ammo > 0) options.fire = "Stun the nearest pursuer in range, then run. Right when they are about to reach me: it stops them for three seconds, costs one charge and adds heat";
     const wanted = c.status === "WANTED";
+    // Nothing to choose between: keep hiding and do not spend a model call on a one-option question.
+    if (Object.keys(options).length < 2) { this.action = "lay_low"; this.nextThinkAt = now + 2000; return; }
     const state = {
       role: "fugitive", name: NAME,
       goal: "Make my own ticker as valuable as I can and never get captured. Jobs raise my price the most, surviving adds a little every few seconds, and capture ends me at zero.",
@@ -153,7 +155,7 @@ export class FugitiveAgent {
     t.effectEventIds.push(res.eventId);
     if (live && chosen) {
       const detail = chosen === "do_job" ? "heading for the open job" : chosen === "lay_low" ? "lying low away from the last pursuer" : chosen === "flee" ? "running from the nearest pursuer" : "firing a stun pulse at the nearest pursuer";
-      const ev = e.emit("AGENT_ACTION_APPLIED", req.agentId, { decisionId: t.id, agentId: req.agentId, role: FUGITIVE_ROLE, action: chosen, decisionSource: source, detail: `${NAME}: ${detail}` }, { ...opts, causationId: res.eventId });
+      const ev = e.emit("AGENT_ACTION_APPLIED", req.agentId, { decisionId: t.id, agentId: req.agentId, role: FUGITIVE_ROLE, action: chosen, decisionSource: source, detail }, { ...opts, causationId: res.eventId });
       t.effectEventIds.push(ev.eventId);
     }
     e.recordAgentTrace(t);
