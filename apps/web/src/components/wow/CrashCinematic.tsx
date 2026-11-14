@@ -86,7 +86,7 @@ export function buildCrashShot(tr: CrashTrigger, s: ShotSource): CrashShot {
     lastSpot: halt?.finalSpotBeforeHalt ?? cap?.spotBeforeCapture ?? listing?.finalSpotBeforeHalt ?? history[history.length - 1]?.spot ?? 0,
     referenceAtCapture: cap ? cap.referenceAtCapture : null,
     bounty: cap ? cap.bounty : null,
-    bountyNote: !cap ? null : cap.doubleCross ? `DOUBLE-CROSS: took it all from crew ${cap.crewName}` : cap.shares && cap.shares.length > 1 ? `split ${cap.shares.length} ways in crew ${cap.crewName}` : null,
+    bountyNote: !cap ? null : cap.doubleCross ? `DOUBLE-CROSS` : cap.shares && cap.shares.length > 1 ? `split ${cap.shares.length} ways` : null,
     captorName: cap ? cap.captorName : null,
     captorLabel, captorIsNpc: cap ? cap.captorKind === "NPC" : null,
     survivalSeconds: cap ? cap.survivalSeconds : null,

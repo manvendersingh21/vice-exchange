@@ -193,7 +193,7 @@ const gamePng = page(`<div style="font-size:30px;letter-spacing:5px;color:#2ee6d
 <div style="margin-top:30px;display:flex;gap:26px">${box("The city", "Open Theft Auto's streets, cars and helicopter. Our server drives who is where and what they decide.", "#2ee6d6")}${box("The swarm", "Witnesses, informants, traders, police and a fugitive: nine agents, one Drex call per decision.", "#ff4fa3")}${box("The trading floor", "A browser terminal shows every decision, message, trade and price as it happens.", "#b98cff")}</div>`, "card-game");
 const hasRyder = !!M.city?.ryder;
 const main = [
-  { id: "hype", kind: "clip", ...part("flyover", 0, 0.12), len: 6, say: "Are you guys ready for G T A six? Say woo! Well, it's not out yet. So, inspired by open-world games like it, we built our own. Vice Exchange: a city where every agent is a trader." },
+  { id: "hype", kind: "clip", ...part("flyover", 0, 0.08), len: 6, say: "Are you guys ready for G T A six? Say woo! Well, it's not out yet. So, inspired by open-world games like it, we built our own. Vice Exchange: a city where every agent is a trader." },
   { id: "title", kind: "card", len: 3, png: card(["Open Theft Auto, rebuilt as a trading floor where every agent decides with Drex.", "Nace AI Drexathon · V$ are fictional game credits"], "card-title"),
     say: "Built on Open Theft Auto, an open source city. All the money is fictional game credits." },
   { id: "track", kind: "card", len: 15, png: trackPng,
@@ -202,10 +202,10 @@ const main = [
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. The game is Open Theft Auto, an open source city, modified so that a swarm of agents runs it." },
   { id: "how-built", kind: "card", len: 14, png: buildPng,
     say: "One step of the swarm. An agent sees something, or gets a message. The server makes one Drex call, built only from what that agent knows. Drex answers with a choice and its probabilities. The server checks it is legal and applies it. That triggers the next agent." },
-  { id: "ota-city", kind: "clip", ...part("flyover", 0, 0.14), len: 9, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and the fugitive Ryder, each deciding with Drex.",
+  { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 8, tag: "ONE CITY · NINE AGENTS", caption: "Inside the modified Open Theft Auto: witnesses, informants, traders, police and Ryder, a Drex-driven fugitive with his own ticker.",
     say: "Nine agents decide with Drex: two witnesses, two informants, two traders, two police, and Ryder, a fugitive who plays the outlaw by himself." },
-  { id: "ota-job", kind: "clip", ...part("job", 0.14, 0.42), len: 9, tag: "COORDINATE", caption: "Ryder does a job. A witness sees it and reports. Police publish a bulletin: WANTED.",
-    say: "Ryder does a job. A witness sees it and reports. Police put out a bulletin, and he is wanted." },
+  { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, tag: "COORDINATE", caption: "A job is witnessed and reported. Police publish a bulletin: WANTED, and the price falls.",
+    say: "A job is done. A witness sees it and reports. Police put out a bulletin. The outlaw is wanted, and the price falls." },
   inTake(tWit) && { id: "terminal-chain", cam: "C", crop: "panels", t0: Math.max(C0, tWit - 2500), t1: Math.min(T("ryder1"), (tBul ?? tWit) + 9000), len: 12, tag: "EVERY ARROW IS ONE DREX DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph of who told whom.", src: "live values from this recording's run",
     say: "The trading floor terminal shows every hop. Each card is one Drex decision, with the options, the probabilities and the latency. The graph shows who told whom." },
   !inTake(tWit) && has("city", "ryder1") && { id: "terminal-chain", cam: "C", crop: "panels", t0: C0, t1: T("ryder1"), len: 12, tag: "EVERY CARD IS ONE DECISION", caption: "The trading floor terminal, same server: each agent's decision card with options, probabilities and latency, and the swarm graph.", src: "live values from this recording's run",
@@ -216,10 +216,10 @@ const main = [
     say: "Traders in a simulated market, each deciding with Drex to grow its own money. A new stock lists, and both traders make their call." },
   has("insTrader1", "insTrader2end") && { id: "traders-wallets", cam: "C", crop: "panels", t0: T("insTrader1"), t1: T("insTrader2end"), len: 8, tag: "OUT FOR PROFIT", caption: traderCap, src: "wallets and trades read from this run",
     say: traderSay2 },
-  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.72), len: 12, tag: "COMPETE", caption: "A human hunter joins the chase inside Open Theft Auto and fires a stun pulse. Police and hunters race for the same capture.",
-    say: "Humans can join the hunt. A hunter chases him down and fires a stun pulse, racing the police for the same capture." },
-  { id: "ota-capture", kind: "clip", ...part("capture", 0.72, 0.84), len: 6, caption: "Captured: the ticker goes to exactly V$0 and trading is halted.",
-    say: "Captured. The stock goes to exactly zero." },
+  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.62), len: 9, tag: "THEY TURN ON EACH OTHER", caption: "Ryder fires his stun pulse at a human hunter. An officer pursues on a Drex decision and captures him: V$0.",
+    say: "Ryder turns on a human hunter and stuns him. Then an officer, on a Drex decision, runs him down. His stock goes to zero." },
+  { id: "ota-capture", kind: "clip", ...part("capture", 0.62, 0.84), len: 9, tag: "COMPETE FOR THE BOUNTY", caption: "The hunter chases the next fugitive, stuns him and makes the capture: the ticker goes to exactly V$0 and the bounty is paid.",
+    say: "The hunter goes after the next one, stuns him, and takes the bounty. The longer he survived, the bigger it is." },
   { id: "ota-carheli", kind: "clip", ...carHeli, len: 8, caption: "Still Open Theft Auto (MIT-licensed, open source): steal a car or take the helicopter.",
     say: "And it is still Open Theft Auto. Steal a car, or take the helicopter." },
   has("insPolice", "insPoliceend") && { id: "ndi", cam: "C", crop: "panels", t0: T("insPolice"), t1: T("insPoliceend"), len: 7, tag: "NDI", caption: "Police decisions cite facts from a real document.", src: "SFPD General Order 5.25 Foot Pursuits, parsed by Nace NDI",
@@ -232,14 +232,16 @@ const main = [
     say: "Every agent is out for its own profit. They team up, and they turn on each other. The longer one survives, the more it is worth, and the bigger the bounty on its head. Vice Exchange." },
 ];
 const npcs = [
-  { id: "ota-city", kind: "clip", ...part("flyover", 0, 0.14), len: 9, caption: "Nine agents in the modified Open Theft Auto city: witnesses, informants, traders, police and the fugitive Ryder.",
-    say: "Nine agents share this city: witnesses, informants, traders, police, and a fugitive. None of them can see what the others know." },
-  { id: "ota-job", kind: "clip", ...part("job", 0.14, 0.42), len: 10, caption: "Ryder does a job; only the agents who saw it react. Report, bulletin, WANTED.",
-    say: "When the fugitive does a job, only the agents who saw it react. A witness reports, and a bulletin goes out." },
-  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: T("ryder1"), len: 13, caption: `Several agents decide at once. ${who}`,
-    say: "Then traders and officers each make their own call, shown live with the options and probabilities." },
-  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.84), len: 11, caption: "Police and a human hunter converge; capture sends the ticker to V$0.",
-    say: "Police and a human hunter close in, and the stock goes to zero." },
+  { id: "ota-city", kind: "clip", ...part("ryder", 0.2, 0.3), len: 8, caption: "Nine agents in the modified Open Theft Auto city: witnesses, informants, traders, police and the fugitive Ryder.",
+    say: "Nine agents share this city: witnesses, informants, traders, police, and a fugitive. Every one of them decides with Drex." },
+  { id: "ota-job", kind: "clip", ...part("job", 0.1, 0.3), len: 8, caption: "A job is witnessed and reported: bulletin, WANTED.",
+    say: "When a job is done, only the agents who saw it react. A witness reports, and a bulletin goes out." },
+  has("city", "ryder1") && { id: "terminal", cam: "C", crop: "panels", t0: inTake(tWit) ? Math.max(C0, tWit - 2000) : C0, t1: T("ryder1"), len: 12, caption: `Several agents decide at once. ${who}`,
+    say: "Traders and officers each make their own call, shown live with the options and the probabilities." },
+  { id: "ota-hunt", kind: "clip", ...part("hunt", 0.42, 0.62), len: 9, caption: "The fugitive agent stuns a human hunter; an officer captures him on a Drex decision.",
+    say: "The fugitive stuns a hunter. An officer runs him down, and the stock goes to zero." },
+  { id: "ota-capture", kind: "clip", ...part("capture", 0.62, 0.84), len: 8, caption: "The hunter stuns the next fugitive and takes the bounty.",
+    say: "Then the hunter takes the next one, and the bounty." },
 ];
 const which = process.env.ONLY;
 if (which === "cards") { console.log("cards rendered:", trackPng, buildPng, gamePng, "voice:", VOICE); }

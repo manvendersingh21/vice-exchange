@@ -107,13 +107,37 @@ try {
   const ryder = s.characters.find((c) => /^Ryder/i.test(c.nickname) && c.role === "OUTLAW");
   await C.cast(true);
   mark("city", { ryder: ryder ? ryder.ticker : null, traders: traders(s) });
-  await sleep(4000);
+  await sleep(1500);
+  // Two human hunters join as one crew (pages in the light 2D view, not recorded). The terminal shows the crew forming
+  // and the agents who react to it; then the crew goes after the fugitive.
+  B = await browser(9442, "B"); D2 = await browser(9444, "D");
+  await B.nav(`${BASE}/?nick=Rio&role=HUNTER&room=VICE-42&auto=1&view=2d&crew=WOLVES`);
+  await D2.nav(`${BASE}/?nick=Vex&role=HUNTER&room=VICE-42&auto=1&view=2d&crew=WOLVES`);
+  await B.cast(true); await B.cast(false); await D2.cast(true); await D2.cast(false); // keep both pages in the foreground so they take input
+  mark("crew0");
+  let cap = null;
   if (ryder) {
-    const cap = await waitEvent((e) => e.type === "CAPTURE_SUCCEEDED", 75000);
-    mark("rydercap", { captured: !!cap, by: cap ? cap.payload.captorName : null, t: cap ? Date.parse(cap.time) : null });
-    await sleep(6500);
+    const tEnd = Date.now() + 75000;
+    const chase = async (P, nick, fire) => {
+      while (!cap && Date.now() < tEnd) {
+        const sn = await snap(); const r = sn.characters.find((c) => /^Ryder/i.test(c.nickname) && ["ACTIVE", "WANTED"].includes(c.status)); const h = live(sn, nick);
+        if (!r || !h) { await sleep(300); continue; }
+        const d = Math.hypot(r.x - h.x, r.z - h.z);
+        if (fire && r.wanted && d < 14) { await P.press("f"); marks.push({ name: "crewshot", t: Date.now(), d: Math.round(d) }); }
+        if (fire && r.wanted && d < 2.6) { await P.press("e"); await sleep(250); continue; }
+        // Close in along the road grid: go to the road row nearest the target first, then along it.
+        await walkTo(P, nick, r.x + (fire ? 0.8 : -3), r.z + (fire ? 0.8 : 3), 3, fire ? 1.6 : 4);
+      }
+    };
+    const watcher = (async () => { cap = await waitEvent((e) => e.type === "CAPTURE_SUCCEEDED", 75000); })();
+    await Promise.race([Promise.all([chase(B, "Rio", true), chase(D2, "Vex", false), watcher]), watcher]);
+    const cs = (await snap()).crews ?? [];
+    mark("rydercap", { captured: !!cap, by: cap ? cap.payload.captorName : null, kind: cap ? cap.payload.captorKind : null, bounty: cap ? cap.payload.bounty : null, crewName: cap ? cap.payload.crewName ?? null : null, doubleCross: cap ? !!cap.payload.doubleCross : false, shares: cap ? cap.payload.shares ?? null : null, t: cap ? Date.parse(cap.time) : null, crews: cs.map((c) => [c.name, c.memberPlayerIds.length]) });
+    await sleep(11000); // the capture cinematic, then five clean seconds of the panels (agent P&L with real earnings)
   } else await sleep(8000);
+  B.close(); D2.close();
   s = await snap();
+  if (SHORT) { mark("ryder1", { traders: traders(s) }); throw new Error("short run end"); }
   mark("ryder1", { traders: traders(s), trades: s.trades.map((t) => [t.actorName, t.side, t.ticker, t.executionPrice]), listings: s.listings.map((l) => [l.ticker, l.status, l.spotPrice]) });
   // Inspector on the spectator page: what each agent knows and where it came from.
   const inspect = async (re, name, scroll) => {
