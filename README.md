@@ -1,6 +1,5 @@
 # VICE EXCHANGE
 
-> **The game is Open Theft Auto, modified.** The city you play in is the MIT-licensed open-source Godot game Open Theft Auto (https://github.com/mehulkapadia5/open-theft-auto) with our bridge applied (`integrations/ota-bridge`): its streets, guns, cars and helicopter, populated by our Drex-driven agents and connected to our authoritative server. The browser app is the trading-floor terminal beside it: market, agent inspector, swarm graph, demo director. The browser also has its own 2D and 3D city views as a fallback.
 
 VICE EXCHANGE is a trading floor inside an original neon city, Coral Bay, where every agent thinks for itself.
 Nine agents decide with a real Nace Drex `choice` call built only from their own private memory: two witnesses, two
